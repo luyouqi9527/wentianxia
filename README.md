@@ -261,6 +261,21 @@ Android 侧（`android/settings.gradle`、`android/app/build.gradle`）:
 
 ## 三、快速开始
 
+> ⚠️ **Windows 用户注意：工程路径必须是纯 ASCII。**
+> 如果路径含中文（例如 `D:\文件\代码\...`），`flutter build apk` 会在最后一步失败：
+> * Dart AOT：`Unable to read file: D:\???\????\...\app.dill`
+> * `impellerc`：`Could not write file to D:\?...\shaders/ink_sparkle.frag`
+> 原因是 AGP / Dart AOT / impellerc 在中文代码页下写文件会丢字符。
+> `android/gradle.properties` 里的 `android.overridePathCheck=true` 只能消掉 AGP 的**警告**，
+> 消不掉这两个真实报错。两种解法：
+> 1. **把工程放到 ASCII 路径**（推荐，例如 `D:\dev\wentianxia`）；
+> 2. 复制到 ASCII 路径构建（保留原目录）：
+>    ```powershell
+>    robocopy "D:\文件\代码\news\wentianxia" C:\wentianxia_build /E /XD build .dart_tool .git .gradle /XF local.properties
+>    cd C:\wentianxia_build; flutter build apk --release
+>    ```
+> CodeMagic 的构建机路径本身就是 ASCII，不受影响。
+
 ```bash
 flutter --version    # 需 3.27.x（Dart 3.6.x）
 
