@@ -1,0 +1,33 @@
+fix(2.0.1): 修复更新内容弹窗不弹/溢出 + 玻璃滑动偶发闪烁
+
+全部来自真机反馈（荣耀机型，2.0.0 安装包实测）。
+
+1) 安装/更新后首次打开不弹「更新内容」
+   根因：闸门挂在 MaterialApp.router 的 builder 里，而 builder 的 context
+   位于 Navigator 之上，showDialog 抛
+   `Navigator operation requested with a context that does not include a
+   Navigator`，被 main.dart 的全局兜底静默吞掉 → 什么都不发生。
+   设置页能弹是因为它处在正常 Navigator 之下。
+   修复：
+   - app_router.dart 暴露 AppRoutes.rootNavigatorKey 并交给 GoRouter
+   - 闸门改用 rootNavigatorKey.currentState.overlay.context 弹窗
+   - 所有 ref/context 在 await 之前同步取出（_present 内同步取 context）
+   - 首次安装改为展示「使用提示」（AppChangelog.welcome），升级才展示更新日志
+   回归测试：test/changelog_gate_test.dart（4 个用例）
+
+2) 更新内容条目溢出玻璃框外
+   Column(mainAxisSize.min) + Flexible(SingleChildScrollView) 让滚动区拿不到
+   有界高度。改为 ConstrainedBox(maxHeight: 屏幕高 62%) + SingleChildScrollView。
+
+3) 玻璃控件滑动时偶发闪烁
+   2.0.0 的 materialize 入场用 Opacity + Transform.scale 包住 BackdropFilter，
+   会在玻璃之上再合成一层 OpacityLayer，与 BackdropFilterLayer 叠加偶发采样闪烁。
+   修复：玻璃回归单层 backdrop，去掉该包装；materialize 参数保留但标注
+   @Deprecated 且无效果；按压果冻形变（pressScale）保留。
+
+4) 顺带修复 HiveService 缺 close()：测试间 deleteFromDisk 后未关闭 Box，
+   后续 readSettings() 抛 `Box has already been closed`。
+
+版本 2.0.0+3 → 2.0.1+4；README 补 2.0.1 修复详情。
+验证：flutter analyze No issues found!；flutter test 22/22 通过；
+release APK 构建成功（versionCode=4 versionName=2.0.1，签名与 2.0.0 一致）。

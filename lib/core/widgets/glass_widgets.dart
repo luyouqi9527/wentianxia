@@ -121,8 +121,12 @@ class LiquidGlass extends StatefulWidget {
   /// 传 0 表示不做按压形变。
   final double pressScale;
 
-  /// 「materialize」入场动画（文档：iOS 不用淡入淡出，而是**渐变折射强度**）。
-  /// 首次挂载时折射强度从 0 涨到 1，同时轻微放大。
+  /// 兼容旧参数（2.0.1 起已废弃）。
+  ///
+  /// 2.0.0 用它做「materialize 入场」（Opacity + Transform），但那会在玻璃之上
+  /// 再合成一层 OpacityLayer，与 BackdropFilterLayer 叠加时偶发采样闪烁，
+  /// 因此 2.0.1 去掉了该动画；参数保留只为不破坏既有调用点。
+  @Deprecated('2.0.1 起玻璃不再叠加 Opacity 合成层（会引发采样闪烁），该参数已无效果')
   final bool materialize;
 
   @override
@@ -132,7 +136,6 @@ class LiquidGlass extends StatefulWidget {
 class _LiquidGlassState extends State<LiquidGlass>
     with TickerProviderStateMixin {
   AnimationController? _press;
-  AnimationController? _intro;
 
   @override
   void initState() {
@@ -143,18 +146,11 @@ class _LiquidGlassState extends State<LiquidGlass>
         duration: const Duration(milliseconds: 120),
       );
     }
-    if (widget.materialize) {
-      _intro = AnimationController(
-        vsync: this,
-        duration: const Duration(milliseconds: 320),
-      )..forward();
-    }
   }
 
   @override
   void dispose() {
     _press?.dispose();
-    _intro?.dispose();
     super.dispose();
   }
 
@@ -168,10 +164,8 @@ class _LiquidGlassState extends State<LiquidGlass>
     final Color baseTint = widget.tint ?? scheme.surface;
     final BorderRadius radius = widget.borderRadius ?? BorderRadius.zero;
 
-    Widget glass(double strength) {
-      final GlassStyle style = strength >= 1
-          ? effective
-          : effective.scaled(strength.clamp(0.05, 1));
+    Widget glass() {
+      final GlassStyle style = effective;
       return ClipRRect(
         borderRadius: radius,
         clipBehavior: widget.clipBehavior,
@@ -199,20 +193,14 @@ class _LiquidGlassState extends State<LiquidGlass>
       );
     }
 
-    Widget content = _intro == null
-        ? glass(1)
-        : AnimatedBuilder(
-            animation: _intro!,
-            builder: (BuildContext context, Widget? _) {
-              final double t = Curves.easeOutCubic.transform(_intro!.value);
-              return Opacity(
-                opacity: t,
-                child: Transform.scale(scale: 0.97 + 0.03 * t, child: glass(t)),
-              );
-            },
-          );
+    Widget content = glass();
 
-    // 按压形变：放大一点点（文档 2.10：scale 1 → 1 + 4dp/height）
+    // 按压形变：放大一点点（文档 2.10：scale 1 → 1 + 4dp/height）。
+    //
+    // ⚠️ 2.0.1：这里曾经还套过「materialize」入场动画（Opacity + Transform.scale），
+    // 它会在玻璃上方再合成一层 OpacityLayer —— 与 BackdropFilterLayer 叠加时
+    // 偶发出现采样闪烁（真机反馈：滑动玻璃下方有时闪一下）。
+    // 现在玻璃回归**单层 backdrop**，入场效果交给页面级过渡，不再额外加合成层。
     Widget result = content;
     final AnimationController? press = _press;
     if (press != null) {

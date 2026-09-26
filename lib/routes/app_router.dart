@@ -22,6 +22,17 @@ class AppRoutes {
   static const String favorites = '/favorites';
   static const String settings = '/settings';
   static const String article = '/article';
+
+  /// 根 Navigator 的 key。
+  ///
+  /// 2.0.1 修复：`MaterialApp.router` 的 `builder` 位于 Navigator **之上**，
+  /// 在那里调用 `showDialog` 会抛
+  /// `Navigator operation requested with a context that does not include a Navigator`
+  /// （2.0.0 的「更新内容」闸门就因此静默失效）。
+  /// 把 go_router 的 root navigator key 暴露出来，闸门即可用
+  /// `navigatorKey.currentContext` 弹窗。
+  static final GlobalKey<NavigatorState> rootNavigatorKey =
+      GlobalKey<NavigatorState>(debugLabel: 'root');
 }
 
 /// go_router 配置持有者：把 router 与 [Listenable] 一起暴露，
@@ -65,6 +76,7 @@ final Provider<GoRouterConfig> appRouterProvider =
   ref.onDispose(listenable.dispose);
 
   final GoRouter router = GoRouter(
+    navigatorKey: AppRoutes.rootNavigatorKey,
     initialLocation: AppRoutes.splash,
     refreshListenable: listenable,
     redirect: (BuildContext context, GoRouterState state) {

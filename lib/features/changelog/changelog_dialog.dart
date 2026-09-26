@@ -2,37 +2,51 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/widgets/blur_container.dart';
+import '../../routes/app_router.dart';
+import '../../shared/hive/app_settings.dart';
 import '../../shared/hive/settings_provider.dart';
 import 'app_changelog.dart';
 
 /// 「更新内容」弹窗：安装 / 更新后首次打开自动展示，也可在设置里手动打开。
 ///
-/// 2.0.0 起，弹窗本身也使用液态玻璃材质（跟随设置里的材质开关）。
+/// 弹窗本身也使用液态玻璃材质（跟随设置里的材质开关）。
 Future<void> showChangelogDialog(
   BuildContext context, {
   AppRelease? release,
+  String? title,
 }) {
   final AppRelease target = release ?? AppChangelog.current;
   return showDialog<void>(
     context: context,
     barrierColor: Colors.black.withValues(alpha: 0.55),
-    builder: (BuildContext context) => ChangelogDialog(release: target),
+    builder: (BuildContext context) =>
+        ChangelogDialog(release: target, title: title),
   );
 }
 
 /// 「更新内容」弹窗内容。
 class ChangelogDialog extends StatelessWidget {
-  const ChangelogDialog({super.key, required this.release});
+  const ChangelogDialog({super.key, required this.release, this.title});
 
   final AppRelease release;
+
+  /// 标题；为空时按是否为「首次安装」自动选择。
+  final String? title;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    // 2.0.1 修复：内容超高时不再溢出玻璃框外。
+    // 之前 `Column(mainAxisSize.min) + Flexible(SingleChildScrollView)` 组合会让
+    // 滚动区拿不到有界高度，条目一多就把文字挤出圆角边界。
+    // 现在给整块内容一个「不超过屏幕 62%」的硬上限，超出部分在框内滚动。
+    final double maxBodyHeight =
+        MediaQuery.sizeOf(context).height * 0.62;
+
     return Dialog(
       backgroundColor: Colors.transparent,
       elevation: 0,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 22, vertical: 40),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 36),
       child: BlurContainer(
         borderRadius: BorderRadius.circular(26),
         opacity: 0.16,
@@ -55,10 +69,15 @@ class ChangelogDialog extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text('更新内容', style: theme.textTheme.titleLarge),
+                      Text(
+                        title ?? (release.version.isEmpty ? '欢迎使用 闻天下' : '更新内容'),
+                        style: theme.textTheme.titleLarge,
+                      ),
                       const SizedBox(height: 2),
                       Text(
-                        '闻天下 v${release.version} · ${release.date}',
+                        release.version.isEmpty
+                            ? '闻天下 v${AppChangelog.currentVersion} · 使用提示'
+                            : '闻天下 v${release.version} · ${release.date}',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -69,7 +88,10 @@ class ChangelogDialog extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16),
-            Flexible(
+            // 有界高度：条目再多也只占屏幕 62%，超出部分在框内滚动，
+            // 保证文字永远不会跑到玻璃圆角外面。
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: maxBodyHeight),
               child: SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -125,6 +147,15 @@ class ChangelogDialog extends StatelessWidget {
 
 /// 启动闸门：如果本地记录的 `lastSeenVersion` 与当前版本不一致，
 /// 就在首帧之后弹出「更新内容」，用户关闭后才写入记录。
+///
+/// ## 2.0.1 修复
+/// 2.0.0 把这个闸门挂在 `MaterialApp.router` 的 `builder` 里，而 **builder 位于
+/// Navigator 之上**，于是 `showDialog` 抛
+/// `Navigator operation requested with a context that does not include a Navigator`，
+/// 异常又被 `main.dart` 的全局兜底吞掉 —— 表现就是「首次打开什么都没弹」。
+///
+/// 现在改用 go_router 的根 navigator（[AppRoutes.rootNavigatorKey]）取 context，
+/// 并且**在任何 await 之前**先把需要的状态读出来（避免异步里再用 ref）。
 class AppChangelogGate extends ConsumerStatefulWidget {
   const AppChangelogGate({super.key, required this.child});
 
@@ -135,7 +166,7 @@ class AppChangelogGate extends ConsumerStatefulWidget {
 }
 
 class _AppChangelogGateState extends ConsumerState<AppChangelogGate> {
-  bool _scheduled = false;
+  bool _done = false;
 
   @override
   void initState() {
@@ -144,21 +175,52 @@ class _AppChangelogGateState extends ConsumerState<AppChangelogGate> {
   }
 
   Future<void> _maybeShow() async {
-    if (_scheduled || !mounted) return;
-    _scheduled = true;
+    if (_done || !mounted) return;
+    _done = true;
 
-    final String seen = ref.read(currentSettingsProvider).lastSeenVersion;
+    // ① 全部同步读取：await 之后不再碰 ref / context
+    final SettingsActions actions = ref.read(settingsActionsProvider);
+    final AppSettings settings = ref.read(currentSettingsProvider);
+    final String seen = settings.lastSeenVersion;
+    debugPrint('[changelog] seen=$seen current=${AppChangelog.currentVersion} '
+        'firstLaunch=${settings.isFirstLaunch}');
     if (seen == AppChangelog.currentVersion) return;
 
-    // 等首帧稳定后再弹，避免与路由跳转抢帧
-    await Future<void>.delayed(const Duration(milliseconds: 350));
-    if (!mounted) return;
+    final NavigatorState? navigator = AppRoutes.rootNavigatorKey.currentState;
+    debugPrint('[changelog] navigator=$navigator');
+    if (navigator == null) return;
 
-    await showChangelogDialog(context, release: AppChangelog.current);
-    if (!mounted) return;
-    await ref
-        .read(settingsActionsProvider)
-        .markVersionSeen(AppChangelog.currentVersion);
+    // 首次安装（还没走过引导）→ 展示「使用提示」；
+    // 已经用过老版本 → 展示本版本「更新内容」。
+    final bool firstInstall = settings.isFirstLaunch || seen.isEmpty;
+    final AppRelease release =
+        firstInstall ? AppChangelog.welcome : AppChangelog.current;
+    final String dialogTitle = firstInstall ? '欢迎使用 闻天下' : '更新内容';
+
+    // ② 等首帧稳定，避免与启动时的路由跳转抢帧
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    debugPrint('[changelog] delay done, presenting...');
+
+    // ③ 弹窗（所有 BuildContext 都在 _present 内同步取用）
+    await _present(navigator, release, dialogTitle);
+    debugPrint('[changelog] dialog closed, marking seen');
+    await actions.markVersionSeen(AppChangelog.currentVersion);
+    debugPrint('[changelog] marked seen');
+  }
+
+  /// 用根 Navigator 的 overlay context 弹窗。
+  ///
+  /// `MaterialApp.router` 的 builder context 位于 Navigator **之上**，
+  /// 在那种 context 上 `showDialog` 会抛
+  /// `Navigator operation requested with a context that does not include a Navigator`。
+  Future<void> _present(
+    NavigatorState navigator,
+    AppRelease release,
+    String title,
+  ) {
+    final BuildContext? dialogContext = navigator.overlay?.context;
+    if (dialogContext == null) return Future<void>.value();
+    return showChangelogDialog(dialogContext, release: release, title: title);
   }
 
   @override

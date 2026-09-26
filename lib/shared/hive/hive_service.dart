@@ -59,6 +59,19 @@ class HiveService {
   AppSettings readSettings() =>
       settingsBox.get(settingsKey) ?? AppSettings();
 
+  /// 关闭全部 Box 并重置初始化标记。
+  ///
+  /// 主要给测试用（用例之间需要重新打开同一份数据库）。
+  /// 之前只调用 `Hive.deleteFromDisk()` 而不关闭 Box，会让后续
+  /// `readSettings()` 抛 `Box has already been closed`。
+  Future<void> close() async {
+    if (!_initialized) return;
+    await settingsBox.close();
+    await favoritesBox.close();
+    await metaBox.close();
+    _initialized = false;
+  }
+
   Future<void> saveSettings(AppSettings settings) async {
     await settingsBox.put(settingsKey, settings);
     await settingsBox.flush();

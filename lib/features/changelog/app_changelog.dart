@@ -20,9 +20,32 @@ class AppChangelog {
   const AppChangelog._();
 
   /// 当前版本号（与 pubspec.yaml 保持一致）。
-  static const String currentVersion = '2.0.0';
+  static const String currentVersion = '2.0.1';
+
+  /// 首次安装时的引导内容（不是「更新」，所以单独一套文案）。
+  static const AppRelease welcome = AppRelease(
+    version: '',
+    date: '',
+    highlights: <String>[
+      '首次使用：在引导页填入「聚合数据」新闻头条接口的 API Key（免费 50 次/天），再挑几个感兴趣的频道。',
+      '上下滑动即可切换新闻；在第一条继续下滑会重新拉取最新内容。',
+      '点「观看全文」进入全文阅读，默认不会自动滚动，需要时点顶部「自动滚动」。',
+      '心形按钮收藏，收藏内容保存在本机，离线也能看标题与摘要。',
+      '「设置 → 磨砂材质」可在「液态玻璃」和「高斯模糊」之间切换，随时改回来。',
+    ],
+  );
 
   static const List<AppRelease> releases = <AppRelease>[
+    AppRelease(
+      version: '2.0.1',
+      date: '2026-02',
+      highlights: <String>[
+        '修复：安装/更新后首次打开现在会正常弹出本弹窗（2.0.0 把弹窗上下文取在 Navigator 之上，导致静默失效）',
+        '修复：更新内容过多时不再溢出玻璃框外，超长内容改为框内滚动',
+        '修复：玻璃控件在滑动时的偶发闪烁（减掉一层 Opacity+Transform 合成，玻璃回归单层 backdrop）',
+        '首次安装改为展示「使用提示」，升级才展示版本更新内容',
+      ],
+    ),
     AppRelease(
       version: '2.0.0',
       date: '2026-02',
