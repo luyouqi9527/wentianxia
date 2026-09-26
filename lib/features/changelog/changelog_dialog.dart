@@ -37,6 +37,7 @@ class ChangelogDialog extends StatelessWidget {
         borderRadius: BorderRadius.circular(26),
         opacity: 0.16,
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
+        materialize: true,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,

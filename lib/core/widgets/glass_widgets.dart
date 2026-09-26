@@ -24,7 +24,7 @@ import 'liquid_glass.dart';
 ///
 /// 两套实现都**不采样实时背景、不依赖光栅缓存**，因此不会出现
 /// 「图像缺失色带 / 滑动闪烁」。
-class LiquidGlass extends StatelessWidget {
+class LiquidGlass extends StatefulWidget {
   const LiquidGlass({
     super.key,
     required this.child,
@@ -39,6 +39,8 @@ class LiquidGlass extends StatelessWidget {
     this.height,
     this.alignment,
     this.clipBehavior = Clip.antiAlias,
+    this.pressScale = 0,
+    this.materialize = false,
   });
 
   /// 面板（大块玻璃）快捷构造。
@@ -53,6 +55,8 @@ class LiquidGlass extends StatelessWidget {
     this.width,
     this.height,
     this.alignment,
+    this.pressScale = 0,
+    this.materialize = false,
     this.borderRadius = const BorderRadius.all(Radius.circular(22)),
   })  : style = GlassStyle.panel,
         clipBehavior = Clip.antiAlias;
@@ -69,6 +73,8 @@ class LiquidGlass extends StatelessWidget {
     this.width,
     this.height,
     this.alignment,
+    this.pressScale = 0,
+    this.materialize = false,
     this.borderRadius = const BorderRadius.all(Radius.circular(14)),
   })  : style = GlassStyle.control,
         clipBehavior = Clip.antiAlias;
@@ -85,6 +91,8 @@ class LiquidGlass extends StatelessWidget {
     this.width,
     this.height,
     this.alignment,
+    this.pressScale = 0,
+    this.materialize = false,
     this.borderRadius = const BorderRadius.all(Radius.circular(20)),
   })  : style = GlassStyle.card,
         clipBehavior = Clip.antiAlias;
@@ -108,45 +116,124 @@ class LiquidGlass extends StatelessWidget {
   final AlignmentGeometry? alignment;
   final Clip clipBehavior;
 
+  /// 交互形变幅度（文档 2.10 节）：按下时整体放大该倍数（如 0.04 = 放大 4%），
+  /// 120ms 缓出。Apple 的「液」很大程度来自这种交互形变，而不是静态材质。
+  /// 传 0 表示不做按压形变。
+  final double pressScale;
+
+  /// 「materialize」入场动画（文档：iOS 不用淡入淡出，而是**渐变折射强度**）。
+  /// 首次挂载时折射强度从 0 涨到 1，同时轻微放大。
+  final bool materialize;
+
+  @override
+  State<LiquidGlass> createState() => _LiquidGlassState();
+}
+
+class _LiquidGlassState extends State<LiquidGlass>
+    with TickerProviderStateMixin {
+  AnimationController? _press;
+  AnimationController? _intro;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.pressScale > 0) {
+      _press = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 120),
+      );
+    }
+    if (widget.materialize) {
+      _intro = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 320),
+      )..forward();
+    }
+  }
+
+  @override
+  void dispose() {
+    _press?.dispose();
+    _intro?.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final GlassMaterial material = GlassScope.of(context);
     // 高斯模糊模式下把参数换成 1.x 的取值
     final GlassStyle effective =
-        material.isLiquid ? style : GlassScope.styleOf(context, style);
-    final Color baseTint = tint ?? scheme.surface;
-    final double tintAlpha = opacity ?? effective.tintOpacity;
+        material.isLiquid ? widget.style : GlassScope.styleOf(context, widget.style);
+    final Color baseTint = widget.tint ?? scheme.surface;
+    final BorderRadius radius = widget.borderRadius ?? BorderRadius.zero;
 
-    final BorderRadius radius = borderRadius ?? BorderRadius.zero;
-
-    return Padding(
-      padding: margin ?? EdgeInsets.zero,
-      child: ClipRRect(
+    Widget glass(double strength) {
+      final GlassStyle style = strength >= 1
+          ? effective
+          : effective.scaled(strength.clamp(0.05, 1));
+      return ClipRRect(
         borderRadius: radius,
-        clipBehavior: clipBehavior,
+        clipBehavior: widget.clipBehavior,
         child: RepaintBoundary(
           child: BackdropFilter(
             filter: ImageFilter.blur(
-              sigmaX: effective.blur,
-              sigmaY: effective.blur,
+              sigmaX: style.blur,
+              sigmaY: style.blur,
             ),
             child: _GlassSurface(
-              style: effective,
+              style: style,
               material: material,
               radius: radius,
               tint: baseTint,
-              tintAlpha: tintAlpha,
-              border: border,
-              width: width,
-              height: height,
-              alignment: alignment,
-              padding: padding,
-              child: child,
+              tintAlpha: widget.opacity ?? effective.tintOpacity,
+              border: widget.border,
+              width: widget.width,
+              height: widget.height,
+              alignment: widget.alignment,
+              padding: widget.padding,
+              child: widget.child,
             ),
           ),
         ),
-      ),
+      );
+    }
+
+    Widget content = _intro == null
+        ? glass(1)
+        : AnimatedBuilder(
+            animation: _intro!,
+            builder: (BuildContext context, Widget? _) {
+              final double t = Curves.easeOutCubic.transform(_intro!.value);
+              return Opacity(
+                opacity: t,
+                child: Transform.scale(scale: 0.97 + 0.03 * t, child: glass(t)),
+              );
+            },
+          );
+
+    // 按压形变：放大一点点（文档 2.10：scale 1 → 1 + 4dp/height）
+    Widget result = content;
+    final AnimationController? press = _press;
+    if (press != null) {
+      result = Listener(
+        onPointerDown: (_) => press.forward(),
+        onPointerUp: (_) => press.reverse(),
+        onPointerCancel: (_) => press.reverse(),
+        child: AnimatedBuilder(
+          animation: press,
+          builder: (BuildContext context, Widget? inner) {
+            final double scale = 1 + widget.pressScale * press.value;
+            return Transform.scale(scale: scale, child: inner);
+          },
+          child: result,
+        ),
+      );
+    }
+
+    return Padding(
+      padding: widget.margin ?? EdgeInsets.zero,
+      child: result,
     );
   }
 }
@@ -242,22 +329,23 @@ class _LiquidGlassPainter extends CustomPainter {
     final double bezel = style.bezelFor(size);
 
     // ---------------------------------------------------------------- (1) 折射
-    // 边缘透镜：t = depth/bezel → profile(t)（凸超椭圆 + Snell 近似），
-    // 结果表现为“边缘被放大/弯折”的亮度增量（凸透镜汇聚光 → 边缘更亮）。
+    // 边缘透镜：t = depth/bezel → profile(t)（圆柱倒角 + Snell 近似）。
+    // 亮度增量严格由 [LiquidGlassRefraction.profile] 驱动：越靠近边缘位移越大，
+    // 表现越亮（凸透镜汇聚光）。中心 region 的 profile = 0 → 不画任何东西，
+    // 保证「中心保持不动」。
     if (style.refraction > 0 && bezel > 0.5) {
       canvas.save();
       canvas.clipRRect(rrect);
 
       const int steps = 6;
-      for (int i = steps - 1; i >= 0; i--) {
-        final double t0 = i / steps;
-        final double t1 = (i + 1) / steps;
-        final double p = LiquidGlassRefraction.profile((t0 + t1) / 2);
+      for (int i = 0; i < steps; i++) {
+        final double t = (i + 0.5) / steps; // 该环带的归一化深度
+        final double profile = LiquidGlassRefraction.profile(t); // 0..1
         final double alpha =
-            (p * style.refraction * 0.22).clamp(0.0, 0.22);
+            (profile * style.refraction * 0.30).clamp(0.0, 0.30);
         if (alpha <= 0.002) continue;
-        // 从外到内：越靠边越亮（折射带内）
-        final double inset = bezel * (1 - t1);
+        final double inset = bezel * t;
+        final double half = bezel / (steps * 2);
         final RRect band = RRect.fromRectAndRadius(
           Rect.fromLTRB(inset, inset, size.width - inset, size.height - inset),
           Radius.circular(math.max(0, radius - inset)),
@@ -268,11 +356,11 @@ class _LiquidGlassPainter extends CustomPainter {
             ..style = PaintingStyle.stroke
             ..strokeWidth = bezel / steps + 0.6
             ..color = Colors.white.withValues(alpha: alpha)
-            ..maskFilter = MaskFilter.blur(BlurStyle.normal, bezel / steps / 2),
+            ..maskFilter = MaskFilter.blur(BlurStyle.normal, half),
         );
       }
 
-      // 中心保持不动 → 折射带以内的区域不受影响（不做任何绘制）
+      // 中心保持不动 → 折射带以内不做任何绘制（t >= 1 的区域）
 
       // ------------------------------------------------------------ (5) 内阴影
       if (style.innerShadow > 0) {
@@ -289,7 +377,8 @@ class _LiquidGlassPainter extends CustomPainter {
           ).createShader(Offset.zero & size);
         canvas.drawRRect(
           rrect.deflate(0.5),
-          inner..style = PaintingStyle.stroke
+          inner
+            ..style = PaintingStyle.stroke
             ..strokeWidth = math.max(1, bezel * 0.25),
         );
       }
@@ -462,6 +551,9 @@ class BlurButton extends StatelessWidget {
             style: GlassStyle.control,
             borderRadius: borderRadius,
             opacity: opacity,
+            // 文档 2.10：交互形变是「液」感的重要来源（按下放大 ~4%，120ms 缓出）
+            pressScale: 0.04,
+            materialize: true,
             child: inner,
           );
 

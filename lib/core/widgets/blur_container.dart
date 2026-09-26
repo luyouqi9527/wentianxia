@@ -39,6 +39,8 @@ class BlurContainer extends StatelessWidget {
     this.height,
     this.alignment,
     this.clipBehavior = Clip.antiAlias,
+    this.pressScale = 0,
+    this.materialize = false,
   });
 
   /// 圆角玻璃容器（最常用）。
@@ -54,6 +56,8 @@ class BlurContainer extends StatelessWidget {
     this.width,
     this.height,
     this.alignment,
+    this.pressScale = 0,
+    this.materialize = false,
   })  : borderRadius = const BorderRadius.all(Radius.circular(16)),
         clipBehavior = Clip.antiAlias;
 
@@ -75,6 +79,12 @@ class BlurContainer extends StatelessWidget {
   final double? height;
   final AlignmentGeometry? alignment;
   final Clip clipBehavior;
+
+  /// 按压形变幅度（文档 2.10 的「液」感）：0 = 关闭。
+  final double pressScale;
+
+  /// 「materialize」入场：渐变折射强度而非淡入（文档 WWDC25-219 论断 2）。
+  final bool materialize;
 
   /// 依据控件尺寸选择材质：小控件用小折射带，大面板用大折射带。
   static GlassStyle styleForSize(Size size) {
@@ -109,6 +119,8 @@ class BlurContainer extends StatelessWidget {
           height: height,
           alignment: alignment,
           clipBehavior: clipBehavior,
+          pressScale: pressScale,
+          materialize: materialize,
           child: child,
         );
       },
