@@ -1,0 +1,50 @@
+# CodeMagic CI/CD 配置 —— 闻天下（Flutter Android）
+#
+# 使用方式：把整个项目目录推到 Git 仓库后，在 CodeMagic 里选择该仓库，
+# CodeMagic 会自动读取本文件并出现 "wentianxia-android" 工作流。
+#
+# 版本组合与本地验证环境保持一致：
+#   Flutter 3.27.4（Dart 3.6.2） + Java 17 + Gradle 8.7 + AGP 8.6.0 + Kotlin 1.9.24
+workflows:
+  wentianxia-android:
+    name: 闻天下 Android Build
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      flutter: 3.27.4
+      # AGP 8.6 / Gradle 8.7 需要 JDK 17。
+      java: 17
+    cache:
+      cache_paths:
+        - $FLUTTER_ROOT/.pub-cache
+        - $HOME/.gradle/caches
+    triggering:
+      events:
+        - push
+        - tag
+      branch_patterns:
+        - pattern: main
+          include: true
+        - pattern: master
+          include: true
+    scripts:
+      - name: Flutter packages
+        script: flutter pub get
+      - name: Static analysis
+        script: flutter analyze
+      - name: Unit tests
+        script: flutter test
+      - name: Build release APKs
+        script: flutter build apk --release
+    artifacts:
+      - build/app/outputs/flutter-apk/app-release.apk
+      - build/app/outputs/flutter-apk/*.apk
+      - build/app/outputs/**/*.aab
+    publishing:
+      email:
+        recipients:
+          # 构建结果邮件通知（改成自己的邮箱，或删掉整段 publishing）
+          - example@example.com
+        notify:
+          success: true
+          failure: true

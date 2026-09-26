@@ -1,0 +1,13 @@
+/.gradle
+/captures/
+/local.properties
+GeneratedPluginRegistrant.java
+
+# 注意：gradle-wrapper.jar / gradlew / gradlew.bat 必须提交到仓库，
+# 否则 CodeMagic 等 CI 无法执行 Gradle 构建。
+
+# Remember to never publicly share your keystore.
+# See https://flutter.dev/to/reference-keystore
+key.properties
+**/*.keystore
+**/*.jks
