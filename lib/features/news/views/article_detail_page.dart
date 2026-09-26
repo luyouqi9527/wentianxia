@@ -202,12 +202,26 @@ class _ArticleDetailPageState extends ConsumerState<ArticleDetailPage> {
       backgroundColor: const Color(0xFF0D0D12),
       body: Stack(
         children: <Widget>[
-          contentAsync.when(
-            loading: () => _buildLoading(article),
-            error: (Object error, StackTrace stack) => _buildError(article, error),
-            data: (ArticleContent content) => _buildContent(article, content),
+          // ① 兜底玻璃底：保证顶部/底部毛玻璃条下方永远有像素可采样
+          //    （正文不足一屏时也不会出现图像缺失的空白带）
+          const GlassBackdrop(
+            colors: <Color>[Color(0xFF12121A), Color(0xFF0D0D12), Color(0xFF17142A)],
           ),
-          // 顶部：返回 + 阅读进度。
+          // ② 正文内容（毛玻璃的真实采样源）。
+          //    用 RepaintBoundary 把「整块滚动内容」作为一个稳定的层，
+          //    而不是包在模糊控件外面——后者会截断 backdrop 采样（1.0.1 修复）。
+          Positioned.fill(
+            child: RepaintBoundary(
+              child: contentAsync.when(
+                loading: () => _buildLoading(article),
+                error: (Object error, StackTrace stack) =>
+                    _buildError(article, error),
+                data: (ArticleContent content) =>
+                    _buildContent(article, content),
+              ),
+            ),
+          ),
+          // ③ 顶部：返回 + 阅读进度。
           Positioned(
             top: 0,
             left: 0,
@@ -220,7 +234,7 @@ class _ArticleDetailPageState extends ConsumerState<ArticleDetailPage> {
               onCycleSpeed: _cycleSpeed,
             ),
           ),
-          // 底部毛玻璃操作栏。
+          // ④ 底部毛玻璃操作栏。
           Positioned(
             left: 0,
             right: 0,
@@ -481,11 +495,23 @@ class _TopProgressBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 1.0.1：整条顶栏一次模糊 + 矩形裁剪（Clip.hardEdge），
+    // 且顶部渐隐底色保证文字可读、模糊采样稳定。
     return ClipRect(
+      clipBehavior: Clip.hardEdge,
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
         child: Container(
-          color: Colors.black.withValues(alpha: 0.22),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: <Color>[
+                Colors.black.withValues(alpha: 0.68),
+                Colors.black.withValues(alpha: 0.34),
+              ],
+            ),
+          ),
           padding: EdgeInsets.only(
             top: MediaQuery.paddingOf(context).top + 6,
             left: 10,
@@ -496,10 +522,11 @@ class _TopProgressBar extends StatelessWidget {
             children: <Widget>[
               Row(
                 children: <Widget>[
-                  BlurContainer(
+                  // 顶栏内部的小按钮：静态半透明填充，避免嵌套 backdrop 层
+                  GlassTint(
                     borderRadius: BorderRadius.circular(14),
-                    blur: 10,
                     opacity: 0.2,
+                    tint: Colors.white,
                     child: Material(
                       color: Colors.transparent,
                       child: InkWell(
@@ -517,6 +544,7 @@ class _TopProgressBar extends StatelessWidget {
                     label: autoScrolling ? '暂停自动滚动' : '自动滚动',
                     icon: autoScrolling ? Icons.pause : Icons.play_arrow,
                     opacity: 0.2,
+                    flat: true,
                     foregroundColor: Colors.white,
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -527,6 +555,7 @@ class _TopProgressBar extends StatelessWidget {
                     label: '${speed}x',
                     icon: Icons.speed,
                     opacity: 0.2,
+                    flat: true,
                     foregroundColor: Colors.white,
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -568,11 +597,23 @@ class _BottomActionBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
+    // 1.0.1：整条操作栏只做一次模糊；栏内按钮改用静态半透明填充（GlassTint），
+    // 避免同一条 bar 上嵌套多个 backdrop 层导致滑动时色带/闪烁。
     return ClipRect(
+      clipBehavior: Clip.hardEdge,
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
         child: Container(
-          color: Colors.black.withValues(alpha: 0.24),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.bottomCenter,
+              end: Alignment.topCenter,
+              colors: <Color>[
+                Colors.black.withValues(alpha: 0.72),
+                Colors.black.withValues(alpha: 0.38),
+              ],
+            ),
+          ),
           padding: EdgeInsets.only(
             top: 12,
             left: 16,
@@ -592,11 +633,9 @@ class _BottomActionBar extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 12),
-              BlurContainer(
+              GlassTint(
                 borderRadius: BorderRadius.circular(16),
-                blur: 10,
-                opacity: 0.2,
-                border: Border.all(color: Colors.white24, width: 0.6),
+                opacity: 0.18,
                 child: Material(
                   color: Colors.transparent,
                   child: InkWell(
@@ -615,11 +654,9 @@ class _BottomActionBar extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 10),
-              BlurContainer(
+              GlassTint(
                 borderRadius: BorderRadius.circular(16),
-                blur: 10,
-                opacity: 0.2,
-                border: Border.all(color: Colors.white24, width: 0.6),
+                opacity: 0.18,
                 child: Material(
                   color: Colors.transparent,
                   child: InkWell(

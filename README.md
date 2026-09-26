@@ -5,6 +5,7 @@
 > （Hive 本地存储），源码中不含任何硬编码密钥。
 
 <p align="left">
+  <img alt="version" src="https://img.shields.io/badge/version-1.0.1-2ea44f" />
   <img alt="flutter" src="https://img.shields.io/badge/Flutter-3.27.4-02569B?logo=flutter" />
   <img alt="dart" src="https://img.shields.io/badge/Dart-3.6.2-0175C2?logo=dart" />
   <img alt="platform" src="https://img.shields.io/badge/Platform-Android-3DDC84?logo=android" />
@@ -12,6 +13,70 @@
   <img alt="riverpod" src="https://img.shields.io/badge/State-Riverpod-4B4BFF" />
   <img alt="ci" src="https://img.shields.io/badge/CI-CodeMagic-8B5CF6" />
 </p>
+
+---
+
+## 版本记录
+
+| 版本 | 说明 |
+| --- | --- |
+| **1.0.1+2**（当前） | **修复毛玻璃控件下方图像缺失（空白色带）与滑动闪烁**；毛玻璃层结构重构；新增模糊回归测试；README 补充技术实现与源码 |
+| 1.0.0+1 | 首个版本：引导页 / 新闻流 / 全文阅读 / 收藏 / 设置 / CodeMagic 构建 |
+
+### 1.0.1 修复详情
+
+![毛玻璃图像缺失](docs/bug-blur-band-1.0.1.jpg)
+
+**现象**：所有毛玻璃控件（底部导航栏、顶部栏、全文页操作栏、收藏卡片、Chip 等）
+下方会出现一块**图像缺失的空白/灰白色带**，滑动时还会**闪烁**。
+
+**根因**：`BackdropFilter` 属于 **backdrop 层**——它必须采样「自己下方已经画好的像素」。
+1.0.0 里为了“避免模糊引发重绘”，在每个毛玻璃控件外面包了 `RepaintBoundary`：
+
+```dart
+// ❌ 1.0.0 的写法（有 bug）
+RepaintBoundary(            // ← 把子树提升为独立 OffsetLayer
+  child: ClipRRect(
+    child: BackdropFilter(  // ← backdrop 采样范围被截断在这个独立层内
+      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+      child: Container(...),//   层内只有半透明控件本身 → 采到空白 → 色带
+    ),
+  ),
+)
+```
+
+子树被提升为独立层后，backdrop 只能拿到**该层内部**的像素（往往只有半透明控件本身），
+于是模糊区域下方出现空洞；滑动时该层又被光栅缓存复用，空洞就表现为闪烁。
+
+**修复**（4 处结构性改动）：
+
+| # | 改动 | 文件 |
+| --- | --- | --- |
+| 1 | 毛玻璃控件**不再包** `RepaintBoundary`；需要隔离重绘时，把边界放在**整块滚动内容**的上一层 | `blur_container.dart`、`news_card.dart`、`interest_selector.dart`、`news_feed_page.dart`、`article_detail_page.dart` |
+| 2 | 新增 `GlassBackdrop`：每个界面 `Stack` 最底层铺一层全屏渐变，保证模糊区域下方**永远有已绘制的像素**（内容不足一屏时也不再出现空白带） | `blur_container.dart` + 各页面 |
+| 3 | 一条 bar 只做**一次**模糊：条内小按钮改用 `GlassTint`（静态半透明填充，不新增 backdrop 层），消除“模糊套模糊”的多层采样 | `BlurBar` / `GlassTint` / `BlurButton(flat: true)` |
+| 4 | 顶栏/底栏改用 `Clip.hardEdge` 矩形裁剪 + 渐隐底色；`NavigationBar` 去掉外层 `RepaintBoundary` | `main_shell.dart`、`news_feed_page.dart`、`article_detail_page.dart` |
+
+修复后的层结构（正确形态）：
+
+```dart
+Stack(children: <Widget>[
+  const GlassBackdrop(),                  // ① 兜底：全屏渐变（永远有像素）
+  Positioned.fill(child: RepaintBoundary( // ② 采样源：整块滚动内容作为一个稳定层
+    child: content,
+  )),
+  ClipRect(                               // ③ 毛玻璃控件：Clip → BackdropFilter → Container
+    clipBehavior: Clip.hardEdge,
+    child: BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+      child: Container(...),
+    ),
+  ),
+])
+```
+
+回归测试 `test/blur_regression_test.dart` 会断言
+**`BackdropFilter` 的祖先链上不允许出现 `RepaintBoundary`**，防止该 bug 再次引入。
 
 ---
 
@@ -95,6 +160,8 @@ Android 侧（`android/settings.gradle`、`android/app/build.gradle`）:
 ## 三、快速开始
 
 ```bash
+flutter --version    # 需 3.27.x（Dart 3.6.x）
+
 # 1. 依赖
 flutter pub get
 
@@ -103,12 +170,12 @@ dart run build_runner build --delete-conflicting-outputs
 
 # 3. 静态检查 + 测试
 flutter analyze     # 期望：No issues found!
-flutter test        # 期望：All tests passed!（8 个用例）
+flutter test        # 期望：All tests passed!（12 个用例）
 
 # 4. 运行 / 打包（Android）
 flutter run
 flutter build apk --release
-# 产物：build/app/outputs/flutter-apk/app-release.apk
+# 产物：build/app/outputs/flutter-apk/app-release.apk（版本 1.0.1+2）
 ```
 
 首次启动 App → 粘贴聚合数据 API Key → 选兴趣频道 → 进入新闻流。
@@ -950,57 +1017,93 @@ Text('还没有收藏的新闻', style: theme.textTheme.titleMedium),
 
 ### 6.11 高斯模糊规范（BlurContainer）
 
-`lib/core/widgets/blur_container.dart` —— 全站毛玻璃的唯一实现入口：
+`lib/core/widgets/blur_container.dart` —— 全站毛玻璃的唯一实现入口。
+
+**⚠️ 关键约束（1.0.1 修复）**：`ClipRRect` 与 `BackdropFilter` 之间、
+以及 `BackdropFilter` 的整条祖先链上，**不允许出现 `RepaintBoundary`**，
+否则 backdrop 采样范围会被截断，出现图像缺失色带与滑动闪烁（详见开头「版本记录」）。
 
 ```dart
-RepaintBoundary(                                   // ① 隔离重绘，模糊不牵连邻居
-  child: ClipRRect(                                // ② 局部裁剪，模糊不外溢
-    borderRadius: borderRadius ?? BorderRadius.zero,
-    clipBehavior: clipBehavior,
-    child: BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),   // ③ 高斯模糊 σ=10
-      child: Container(                            // ④ child 必须是可见容器，否则无效果
-        width: width, height: height, alignment: alignment, padding: padding, margin: margin,
-        decoration: BoxDecoration(
-          color: baseTint.withValues(alpha: opacity),     // 半透明底色
-          borderRadius: borderRadius,
-          border: border ?? Border.all(
-            color: scheme.outlineVariant.withValues(alpha: 0.35), width: 0.8),
-        ),
-        child: child,
+// lib/core/widgets/blur_container.dart（1.0.1 正确形态）
+return ClipRRect(                                   // ① 局部裁剪，模糊不外溢
+  borderRadius: borderRadius ?? BorderRadius.zero,
+  clipBehavior: clipBehavior,
+  child: BackdropFilter(
+    filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10), // ② 高斯模糊 σ=10
+    child: Container(                                // ③ child 必须是可见容器
+      width: width, height: height, alignment: alignment,
+      padding: padding, margin: margin,
+      decoration: BoxDecoration(
+        color: baseTint.withValues(alpha: opacity),   // 半透明底色：让模糊看得见
+        borderRadius: borderRadius,
+        border: border ?? Border.all(
+          color: scheme.outlineVariant.withValues(alpha: 0.35), width: 0.8),
       ),
+      child: child,
     ),
   ),
-)
+);
+// 注意：这里刻意不包 RepaintBoundary（原因见 1.0.1 修复说明）
 ```
 
-毛玻璃按钮（卡片「观看全文」、错误重试、全文页操作栏都用它）：
+配套的三个组件（同一个文件）：
+
+| 组件 | 作用 | 关键点 |
+| --- | --- | --- |
+| `GlassBackdrop` | 页面最底层铺全屏渐变 | 保证毛玻璃下方**永远有已绘制像素**，内容不足一屏也不会出现空白带 |
+| `GlassTint` | 静态半透明填充 | 用于**已在模糊条内部**的按钮，不再叠加 backdrop 层（避免多层采样色带/闪烁） |
+| `BlurBar` | 顶/底悬浮毛玻璃条 | 整条只做一次模糊，`Clip.hardEdge` 矩形裁剪 + 自定义内边距 |
+
+毛玻璃按钮（卡片「观看全文」、错误重试、引导页「前往聚合数据申请」等都用它；
+`flat: true` 时自动降级为 `GlassTint`，用于模糊条内部）：
 
 ```dart
-BlurContainer(
-  borderRadius: borderRadius, blur: blur, opacity: opacity,
-  child: Material(
-    color: Colors.transparent,
-    child: InkWell(
-      onTap: onPressed, borderRadius: borderRadius,
-      child: Padding(padding: padding, child: Row(
-        mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: <Widget>[
-          if (icon != null) ...<Widget>[Icon(icon, size: 18, color: fg), const SizedBox(width: 8)],
-          Text(label, style: theme.textTheme.labelLarge?.copyWith(color: fg, fontWeight: FontWeight.w600)),
-        ])),
+// lib/core/widgets/blur_container.dart
+Widget button = flat
+    ? GlassTint(                       // 模糊条内部：静态填充，零 backdrop 层
+        borderRadius: borderRadius,
+        opacity: opacity + 0.04,
+        tint: theme.colorScheme.surface,
+        child: inner,
+      )
+    : BlurContainer(                   // 独立控件：真正的 BackdropFilter 模糊
+        borderRadius: borderRadius,
+        blur: blur,
+        opacity: opacity,
+        child: inner,
+      );
+```
+
+页面级用法（三层结构，三层职责分明）：
+
+```dart
+// lib/features/news/views/news_feed_page.dart
+Scaffold(
+  backgroundColor: Colors.black,
+  body: Stack(children: <Widget>[
+    const GlassBackdrop(                                  // ① 兜底玻璃底
+      colors: <Color>[Color(0xFF141118), Color(0xFF0A0A0D), Color(0xFF171226)],
     ),
-  ),
+    Positioned.fill(child: RefreshIndicator(              // ② 采样源：整屏内容
+      onRefresh: _refresh,
+      child: NotificationListener<ScrollNotification>(
+        onNotification: _onScrollNotification,
+        child: _buildBody(state),
+      ),
+    )),
+    Positioned(top: 0, left: 0, right: 0,                 // ③ 顶部毛玻璃信息栏
+      child: _TopBar(...)),
+  ]),
 )
 ```
 
-模糊控件覆盖范围：通用容器、按钮（观看全文 / 重试 / 阅读原文 / 上一步）、顶部刷新与设置图标钮、收藏心形钮、
-底部 `NavigationBar`、全文页顶部进度条与底部操作栏、频道切换弹窗、兴趣 `Chip`、收藏卡片、空状态占位。
+模糊控件覆盖范围：通用容器、按钮（观看全文 / 重试 / 阅读原文 / 上一步 / 前往聚合数据申请）、
+顶部刷新与设置图标钮、收藏心形钮、底部 `NavigationBar`、全文页顶部进度条与底部操作栏、
+频道切换弹窗、兴趣 `Chip`、收藏卡片、空状态占位。
 
 **关于 `BackdropGroup` / `BackdropFilter.grouped()`**：该 API 自 **Flutter 3.35** 起才可用，
-本项目锁定 CodeMagic 上验证过的 3.27.4，因此 `BlurGroup` 目前是**零开销的语义化分组容器**
-（每个模糊控件自身已用 `RepaintBoundary` 隔离重绘）。升级到 3.35+ 后只需一处替换：
+本项目锁定 CodeMagic 上验证过的 3.27.4，因此 `BlurGroup` 目前是**零开销的语义化分组容器**。
+升级到 3.35+ 后只需一处替换（可让一组模糊控件共享同一次背景采样，进一步省 GPU）：
 
 ```dart
 class BlurGroup extends StatelessWidget {
@@ -1010,6 +1113,18 @@ class BlurGroup extends StatelessWidget {
   Widget build(BuildContext context) => BackdropGroup(child: child);  // ← 改为这一行
 }
 ```
+
+### 6.11.1 毛玻璃的层结构规则（务必遵守）
+
+| 规则 | 说明 |
+| --- | --- |
+| ✅ 允许 | `ClipRRect/ClipRect` → `BackdropFilter` → `Container`（可见装饰盒） |
+| ❌ 禁止 | `RepaintBoundary` 出现在 `BackdropFilter` 的祖先链上（截断 backdrop 采样） |
+| ❌ 禁止 | 一条 bar 内嵌套多个 `BackdropFilter`（多层 backdrop → 色带/闪烁/GPU 翻倍） |
+| ✅ 推荐 | 需要隔离重绘时，把 `RepaintBoundary` 包在**整块滚动内容**的上一层 |
+| ✅ 必须 | 每个界面用 `GlassBackdrop` 铺一层全屏底（模糊下方永远有像素） |
+
+回归测试会自动检查前两条：`test/blur_regression_test.dart`。
 
 ### 6.12 Material 3 主题
 
@@ -1152,7 +1267,7 @@ Android 权限与外部跳转声明（`android/app/src/main/AndroidManifest.xml`
 
 ## 八、CodeMagic 构建
 
-仓库根目录已包含 `codemagic.yaml`：
+当前版本 **1.0.1+2**（versionCode 2）。仓库根目录已包含 `codemagic.yaml`：
 
 ```yaml
 workflows:
@@ -1206,8 +1321,10 @@ workflows:
 
 ```bash
 flutter test
-# 00:00 +8: All tests passed!
+# 00:01 +12: All tests passed!
 ```
+
+`test/widget_test.dart`（8 个用例）—— 本地存储 / 正文抽取 / 模型逻辑：
 
 | 用例 | 校验点 |
 | --- | --- |
@@ -1219,6 +1336,15 @@ flutter test
 | 简介为空截取 200 字符 | `defaultSummary` 长度 201（200 + 省略号） |
 | `url` 为空时的稳定 id | 同一标题两次生成相同哈希 id |
 | Material 3 渲染冒烟 | `useMaterial3: true` 下基础组件正常构建 |
+
+`test/blur_regression_test.dart`（4 个用例）—— **1.0.1 毛玻璃层结构回归测试**：
+
+| 用例 | 校验点 |
+| --- | --- |
+| `BlurContainer` 层结构 | 必须含 `BackdropFilter` + `ClipRRect`，且内部**不含** `RepaintBoundary` |
+| `BackdropFilter` 祖先链 | 祖先链上不允许出现 `RepaintBoundary`（该 bug 的根因） |
+| `BlurButton` 两种形态 | 普通形态产生 backdrop 层；`flat: true` 形态不产生（用于模糊条内部） |
+| `GlassBackdrop` / `GlassTint` | 兜底底铺满全屏且绘制渐变；`GlassTint` 不引入新的 backdrop 层 |
 
 ---
 
@@ -1244,7 +1370,8 @@ flutter test
 | 「阅读原文」跳浏览器 | `url_launcher` + manifest `<queries>` |
 | 收藏图标切换与持久化 | `isFavoriteProvider` + `Box<NewsArticle>` |
 | 收藏页缩略图/标题/收藏时间 + 左滑删除 | `favorites_page.dart`（`Dismissible`） |
-| 高斯模糊规范（BackdropFilter + 参数 10 + ClipRect + RepaintBoundary） | `blur_container.dart` |
+| 高斯模糊规范（BackdropFilter + 参数 10 + 局部 Clip） | `blur_container.dart`（1.0.1 起色带/闪烁已修，见版本记录） |
+| 毛玻璃下方图像缺失 / 滑动闪烁 | **1.0.1 修复**：去掉模糊控件外层 `RepaintBoundary` + `GlassBackdrop` 兜底 + 一条 bar 一次模糊（`BlurBar`/`GlassTint`），回归测试 `blur_regression_test.dart` |
 | Material 3 主题（`ColorScheme.fromSeed` + NavigationBar/Card/Chip/FilledButton） | `app_theme.dart` |
 | 错误提示 SnackBar + 重试 | `news_feed_page.dart` / `article_detail_page.dart` |
 | 空状态「还没有收藏的新闻」 | `favorites_page.dart` |
@@ -1274,9 +1401,16 @@ flutter test
 方便直接安装验证。正式发布请在 `android/app/build.gradle` 中换成自己的 keystore，
 并把 `signingConfig = signingConfigs.debug` 替换为 release 配置。
 
-**6. 模糊控件很多会不会卡？**
-每个模糊区域都包了 `RepaintBoundary`，`PageView` 一屏只构建当前页；
-`BackdropGroup` 优化受 Flutter 版本限制，升级到 3.35+ 后按 6.11 节替换一行即可开启。
+**6. 毛玻璃下方出现空白带 / 滑动闪烁（1.0.1 已修复）？**
+根因是 `BackdropFilter` 的祖先链上出现了 `RepaintBoundary`，导致 backdrop 采样被截断。
+修复方式与规则见「版本记录 · 1.0.1 修复详情」和「6.11.1 毛玻璃的层结构规则」。
+`test/blur_regression_test.dart` 会持续守护这两条约束——如果你的改动让测试失败，
+说明又把 `RepaintBoundary` 放回了模糊控件的上层。
+
+**7. 模糊控件很多会不会卡？**
+一屏只构建当前页（`PageView`），每条 bar 只做一次模糊，条内按钮用 `GlassTint`
+静态填充而非再叠 backdrop，因此 backdrop 层数量被压到最少。
+`BackdropGroup` 共享采样优化受 Flutter 版本限制，升级到 3.35+ 后按 6.11 节替换一行即可开启。
 
 ---
 

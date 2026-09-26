@@ -55,23 +55,38 @@ class FavoritesPage extends ConsumerWidget {
             ),
         ],
       ),
-      body: favorites.isEmpty
-          ? const _EmptyFavorites()
-          : ListView.separated(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 110),
-              itemCount: favorites.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (BuildContext context, int index) {
-                final NewsArticle article = favorites[index];
-                return Dismissible(
-                  key: ValueKey<String>('fav-${article.key}'),
-                  direction: DismissDirection.endToStart,
-                  background: _dismissBackground(theme),
-                  onDismissed: (_) => _remove(context, ref, article),
-                  child: _FavoriteTile(article: article),
-                );
-              },
-            ),
+      body: Stack(
+        children: <Widget>[
+          // 1.0.1：兜底玻璃底 —— 收藏为空或不足一屏时，底部毛玻璃导航栏
+          // 下方依然有已绘制的像素，不会出现图像缺失的空白带/闪烁。
+          const GlassBackdrop(
+            colors: <Color>[
+              Color(0xFF15121F),
+              Color(0xFF0B0B10),
+              Color(0xFF1B1330),
+            ],
+          ),
+          Positioned.fill(
+            child: favorites.isEmpty
+                ? const _EmptyFavorites()
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 110),
+                    itemCount: favorites.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (BuildContext context, int index) {
+                      final NewsArticle article = favorites[index];
+                      return Dismissible(
+                        key: ValueKey<String>('fav-${article.key}'),
+                        direction: DismissDirection.endToStart,
+                        background: _dismissBackground(theme),
+                        onDismissed: (_) => _remove(context, ref, article),
+                        child: _FavoriteTile(article: article),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 

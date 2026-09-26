@@ -120,11 +120,16 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
                     ],
                   ),
                 ),
-                _BottomBar(
-                  step: _step,
-                  loading: state.saving,
-                  onNext: _onNext,
-                  onBack: _step == 0 ? null : () => _goToStep(0),
+                // 1.0.1：底部毛玻璃条撑满整行宽度，
+                // 避免 Column 居中布局导致宽度收缩、模糊区域下方无像素可采样。
+                SizedBox(
+                  width: double.infinity,
+                  child: _BottomBar(
+                    step: _step,
+                    loading: state.saving,
+                    onNext: _onNext,
+                    onBack: _step == 0 ? null : () => _goToStep(0),
+                  ),
                 ),
               ],
             ),

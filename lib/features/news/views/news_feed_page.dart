@@ -98,7 +98,11 @@ class _NewsFeedPageState extends ConsumerState<NewsFeedPage> {
       backgroundColor: Colors.black,
       body: Stack(
         children: <Widget>[
-          // 主体：垂直 PageView。
+          // ① 兜底玻璃底：即使列表为空/骨架屏，顶部栏下方也有像素可采样
+          const GlassBackdrop(
+            colors: <Color>[Color(0xFF141118), Color(0xFF0A0A0D), Color(0xFF171226)],
+          ),
+          // ② 主体：垂直 PageView（毛玻璃的真实采样源）
           Positioned.fill(
             child: RefreshIndicator(
               onRefresh: _refresh,
@@ -110,7 +114,7 @@ class _NewsFeedPageState extends ConsumerState<NewsFeedPage> {
               ),
             ),
           ),
-          // 顶部毛玻璃信息栏。
+          // ③ 顶部毛玻璃信息栏（整体一次模糊，避免条内叠加多个 backdrop 层）
           Positioned(
             top: 0,
             left: 0,
@@ -182,11 +186,24 @@ class _TopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    // 1.0.1：整条顶栏只做一次模糊，且用 Clip.hardEdge（矩形裁剪更快、也不参与
+    // 抗锯齿采样），避免条内的多个 backdrop 层互相干扰产生色带/闪烁。
     return ClipRect(
+      clipBehavior: Clip.hardEdge,
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
         child: Container(
-          color: Colors.black.withValues(alpha: 0.18),
+          // 不透明底色 + 顶部渐隐，保证文字可读，同时让模糊有稳定的采样底
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: <Color>[
+                Colors.black.withValues(alpha: 0.62),
+                Colors.black.withValues(alpha: 0.34),
+              ],
+            ),
+          ),
           padding: EdgeInsets.only(
             top: MediaQuery.paddingOf(context).top + 8,
             left: 14,
@@ -207,6 +224,7 @@ class _TopBar extends StatelessWidget {
                 label: channelLabel,
                 icon: Icons.tune,
                 opacity: 0.22,
+                flat: true, // 已在模糊条内部：不再叠一层 backdrop，避免色带/闪烁
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                 foregroundColor: Colors.white,
@@ -253,20 +271,20 @@ class _IconBlurButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return RepaintBoundary(
-      child: BlurContainer(
-        borderRadius: BorderRadius.circular(14),
-        blur: 10,
-        opacity: 0.2,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: onPressed,
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Icon(icon, size: 20, color: Colors.white),
-            ),
+    // 1.0.1：顶部栏内部的小按钮用 GlassTint 静态填充，
+    // 不再嵌套 BackdropFilter（嵌套会让同一条 bar 上叠多层 backdrop → 滑动色带/闪烁）。
+    return GlassTint(
+      borderRadius: BorderRadius.circular(14),
+      opacity: 0.22,
+      tint: Colors.white,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: onPressed,
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Icon(icon, size: 20, color: Colors.white),
           ),
         ),
       ),
