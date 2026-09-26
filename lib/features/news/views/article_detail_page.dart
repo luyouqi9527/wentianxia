@@ -24,6 +24,10 @@ import '../providers/news_provider.dart';
 class ArticleDetailPage extends ConsumerStatefulWidget {
   const ArticleDetailPage({super.key, this.article, this.articleId});
 
+  /// 2.0.0 起：进入全文页**默认不启动**自动滚动。
+  /// 保留为公开常量，便于测试与将来做「默认开启」的用户选项。
+  static const bool autoScrollByDefault = false;
+
   /// 从列表页直接传入（最快，无需再查）。
   final NewsArticle? article;
 
@@ -37,13 +41,20 @@ class ArticleDetailPage extends ConsumerStatefulWidget {
 class _ArticleDetailPageState extends ConsumerState<ArticleDetailPage> {
   final ScrollController _scrollController = ScrollController();
   Timer? _autoScrollTimer;
-  bool _autoScrollEnabled = true;
+
+  /// 2.0.0 修复：默认**不启动**自动滚动，且只有用户点按按钮才会启动。
+  /// 1.x 的 bug 是：内容加载完成后会自动 `_scheduleAutoScroll()`，
+  /// 于是用户点「暂停」停住后，下一次重建又把它启动起来 → 停不掉。
+  bool _autoScrollEnabled = false;
 
   /// 自动滚动基准速度：40 像素/秒（每 25ms 滚动 1px）。
   static const double _basePixelsPerTick = 1.0;
   static const int _tickMs = 25;
   double _speedMultiplier = 1.0;
   double _progress = 0;
+
+  /// 当前正在阅读的文章 id：切换文章时停掉上一轮的自动滚动。
+  String? _lastArticleKey;
 
   @override
   void initState() {
@@ -73,23 +84,18 @@ class _ArticleDetailPageState extends ConsumerState<ArticleDetailPage> {
     }
   }
 
-  /// 首帧渲染完成后再启动自动滚动（此时布局/滚动范围才可用）。
-  void _scheduleAutoScroll() {
-    if (_autoScrollTimer != null) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _autoScrollTimer == null) _startAutoScroll();
-    });
-  }
-
   void _startAutoScroll() {
     _autoScrollTimer?.cancel();
     _autoScrollTimer = Timer.periodic(const Duration(milliseconds: _tickMs), (_) {
-      if (!_scrollController.hasClients) return;
+      if (!_scrollController.hasClients) {
+        _stopAutoScroll();
+        return;
+      }
       final double max = _scrollController.position.maxScrollExtent;
       final double next =
           _scrollController.offset + _basePixelsPerTick * _speedMultiplier;
-      if (next >= max) {
-        _scrollController.jumpTo(max);
+      if (max <= 0 || next >= max) {
+        if (_scrollController.hasClients) _scrollController.jumpTo(max);
         _stopAutoScroll();
         return;
       }
@@ -104,6 +110,7 @@ class _ArticleDetailPageState extends ConsumerState<ArticleDetailPage> {
     if (mounted) setState(() => _autoScrollEnabled = false);
   }
 
+  /// 播放 / 暂停：以“计时器是否存在”为唯一判据，保证一定能停住。
   void _toggleAutoScroll() {
     if (_autoScrollTimer == null) {
       _startAutoScroll();
@@ -186,17 +193,13 @@ class _ArticleDetailPageState extends ConsumerState<ArticleDetailPage> {
         ref.watch(articleContentProvider(article));
     final bool favorite = ref.watch(isFavoriteProvider(article.key));
 
-    // 内容就绪后自动开始滚动（`articleContentProvider` 有缓存，二次进入时
-    // listen 不会触发，因此这里单独处理“已有数据”的情况）。
-    ref.listen<AsyncValue<ArticleContent>>(
-      articleContentProvider(article),
-      (AsyncValue<ArticleContent>? previous, AsyncValue<ArticleContent> next) {
-        if (next.hasValue && !(previous?.hasValue ?? false)) {
-          _scheduleAutoScroll();
-        }
-      },
-    );
-    if (contentAsync.hasValue) _scheduleAutoScroll();
+    // 2.0.0：这里**不再**自动启动滚动（默认关闭）。
+    // 内容就绪时不碰计时器，用户点「自动滚动」才开始，点「暂停」一定能停住。
+    // 同时，切到别的文章时把计时器停掉，避免“上一篇还在滚”。
+    if (_lastArticleKey != article.key) {
+      _lastArticleKey = article.key;
+      if (_autoScrollTimer != null) _stopAutoScroll();
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D12),
@@ -541,6 +544,7 @@ class _TopProgressBar extends StatelessWidget {
                   ),
                   const Spacer(),
                   BlurButton(
+                    // 默认是「自动滚动」（未启动）；已在滚动时显示「暂停自动滚动」
                     label: autoScrolling ? '暂停自动滚动' : '自动滚动',
                     icon: autoScrolling ? Icons.pause : Icons.play_arrow,
                     opacity: 0.2,

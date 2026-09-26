@@ -11,3 +11,9 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# 例外：2.0.0 起项目自带一把固定的应用签名密钥，并**有意提交**到仓库，
+# 目的是让本地与 CodeMagic 构建共用同一签名，覆盖安装不再提示
+# 「签名不一致，需要先卸载旧版本」。若不希望公开，请删掉下面这行、
+# 换成自有 keystore 并通过环境变量注入密码。
+!app/wentianxia-release.jks

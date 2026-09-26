@@ -5,6 +5,22 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+// ---------------------------------------------------------------------------
+// 固定签名（2.0.0 修复「应用签名不同，需要删除旧版本」）
+//
+// 1.x 用的是 AGP 默认 debug 签名：密钥随机器/构建环境变化，而 CodeMagic 与本机
+// 又是两个环境，于是覆盖安装时荣耀等系统的安装器会报「签名不一致，需先卸载」
+// （卸载 = 清空数据）。
+//
+// 解决方式：把密钥库提交进仓库（个人项目），让 **debug 与 release 共用同一把
+// 密钥**，本地与 CI 产出的 APK 签名完全一致，覆盖安装不再报错。
+//
+// 想要更安全的方案：把 jks 移出仓库，改从 key.properties / 环境变量读取，
+// 并在 CodeMagic 里配置对应环境变量。
+// ---------------------------------------------------------------------------
+def wentianxiaKeystore = file('wentianxia-release.jks')
+def hasWentianxiaKeystore = wentianxiaKeystore.exists()
+
 android {
     namespace = "com.wentianxia.news"
     compileSdk = 35
@@ -30,13 +46,30 @@ android {
         multiDexEnabled = true
     }
 
+    signingConfigs {
+        if (hasWentianxiaKeystore) {
+            wentianxia {
+                storeFile = wentianxiaKeystore
+                storePassword = "wentianxia2026"
+                keyAlias = "wentianxia"
+                keyPassword = "wentianxia2026"
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // Debug signing keeps `flutter build apk --release` installable.
-            // Replace with your own keystore before publishing.
-            signingConfig = signingConfigs.debug
+            // 与 debug 共用同一把密钥 → 本地 / CI 签名一致，覆盖安装不报错
+            signingConfig = hasWentianxiaKeystore
+                    ? signingConfigs.wentianxia
+                    : signingConfigs.debug
             minifyEnabled = false
             shrinkResources = false
+        }
+        debug {
+            if (hasWentianxiaKeystore) {
+                signingConfig = signingConfigs.wentianxia
+            }
         }
     }
 

@@ -2,7 +2,7 @@ name: wentianxia
 description: "闻天下 —— 基于 Flutter + Material 3 的新闻阅读 App：聚合数据新闻头条 API、垂直滑动浏览、毛玻璃交互、本地收藏。"
 publish_to: "none"
 
-version: 1.0.1+2
+version: 2.0.0+3
 
 environment:
   sdk: ">=3.3.0 <4.0.0"

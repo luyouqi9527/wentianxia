@@ -1,15 +1,15 @@
 # 闻天下 · Flutter 新闻阅读 App
 
-> Material 3 + 高斯模糊（毛玻璃）+ 短视频式垂直滑动浏览的新闻阅读应用。
+> Material 3 + **液态玻璃（Liquid Glass）** + 短视频式垂直滑动浏览的新闻阅读应用。
 > 数据源为**聚合数据 · 新闻头条 API**；**API Key 由用户在首次启动时填写并只保存在本机**
 > （Hive 本地存储），源码中不含任何硬编码密钥。
 
 <p align="left">
-  <img alt="version" src="https://img.shields.io/badge/version-1.0.1-2ea44f" />
+  <img alt="version" src="https://img.shields.io/badge/version-2.0.0-2ea44f" />
   <img alt="flutter" src="https://img.shields.io/badge/Flutter-3.27.4-02569B?logo=flutter" />
   <img alt="dart" src="https://img.shields.io/badge/Dart-3.6.2-0175C2?logo=dart" />
   <img alt="platform" src="https://img.shields.io/badge/Platform-Android-3DDC84?logo=android" />
-  <img alt="material" src="https://img.shields.io/badge/Material-3-6750A4" />
+  <img alt="material" src="https://img.shields.io/badge/Material-3%20%2B%20LiquidGlass-6750A4" />
   <img alt="riverpod" src="https://img.shields.io/badge/State-Riverpod-4B4BFF" />
   <img alt="ci" src="https://img.shields.io/badge/CI-CodeMagic-8B5CF6" />
 </p>
@@ -20,8 +20,106 @@
 
 | 版本 | 说明 |
 | --- | --- |
-| **1.0.1+2**（当前） | **修复毛玻璃控件下方图像缺失（空白色带）与滑动闪烁**；毛玻璃层结构重构；新增模糊回归测试；README 补充技术实现与源码 |
+| **2.0.0+3**（当前） | **全新「液态玻璃」材质**（边缘折射 + 色散 + 45° 边缘高光 + 内阴影）；设置里可切换「液态玻璃 / 高斯模糊」；修复全文页**自动滚动停不掉**的 bug 且默认不再自动滚动；**统一 APK 签名**（覆盖安装不再提示签名不一致）；安装/更新后首次打开弹出**更新内容** |
+| 1.0.1+2 | 修复毛玻璃控件下方图像缺失（空白色带）与滑动闪烁；毛玻璃层结构重构；新增模糊回归测试 |
 | 1.0.0+1 | 首个版本：引导页 / 新闻流 / 全文阅读 / 收藏 / 设置 / CodeMagic 构建 |
+
+### 2.0.0 更新详情
+
+#### ① 液态玻璃材质（默认）
+
+材质引擎在 `lib/core/widgets/liquid_glass.dart` + `glass_widgets.dart`，
+数学与参数**逐条对齐**项目内《液态玻璃实现技术文档》：
+
+| 文档要素 | 本实现 |
+| --- | --- |
+| 圆角矩形 SDF | `LiquidGlassRefraction.sdRoundedRect`（文档 1.3 节原式） |
+| 半径取值坑位 | 梯度半径用 `min(r × 1.5, min(halfW, halfH))`，避免圆角处放射状折痕 |
+| 折射剖面 | 圆柱倒角 `h(u)=1-√(1-u²)` → `slope=tanθ₁` → Snell `n=1/1.5` → 侧向位移 `tan(θ₁-θ₂)`，归一化后**中心 0 → 边缘 1** |
+| 归一化深度 | `t = clamp(-sd / bezel, 0, 1)`，只有 `t<1` 的环形带参与折射 |
+| 位移量 | `bezel = clamp(min(w,h) × 0.12, 6, 28)`，`位移 ≈ bezel × 1.6~2.0` |
+| 模糊必须小 | 液态玻璃 σ = 2~4（文档：>8px 会把折射细节抹平，退化成毛玻璃） |
+| 六层堆叠顺序 | 折射 → 模糊 → tint → 高光 → 色边/边缘光 → 内容 |
+| 色散 | 冷暖双侧 1px 内描边（文档 1.5 节的廉价替代方案） |
+| 高光 | `∇SDF` 与 45° 光源点积，`abs(dot)` 实现双面反光 |
+| 内阴影 | 上暗下亮的 inset 渐变（玻璃厚度） |
+| 参数 | `saturation 1.35`、`tint alpha 0.09~0.14`、`specular 0.38~0.5`、`innerShadow 0.10~0.16` |
+
+> **关于「真·背景重采样」**：Flutter 的 `dart:ui` 只提供
+> `ImageFilter.blur/dilate/erode/matrix/compose`，**没有**把 `FragmentShader`
+> 作为 `ImageFilter` 使用的公开入口（`ImageFilter.shader()` 在 3.27.4 上不存在），
+> 因此无法让 `BackdropFilter` 直接把背景按位移场重采样。
+> 本实现采用的是**解析式折射**：用同一套 SDF + Snell 数学算出边缘的位移剖面，
+> 再把「位移 → 采样偏移」的物理结果解析地画成光学层。
+> 好处是**逐帧确定、不采样实时背景、不依赖光栅缓存**，
+> 所以既拿到了折射/色散/高光的观感，又**彻底没有图像缺失与闪烁**。
+
+#### ② 材质切换开关
+
+「设置 → 磨砂材质」用 Material 3 `SegmentedButton` 切换：
+
+```dart
+// lib/shared/hive/settings_provider.dart
+final Provider<GlassMaterial> glassMaterialProvider = Provider<GlassMaterial>((Ref ref) {
+  final GlassMode mode = ref.watch(glassModeProvider);          // 来自 Hive
+  return mode == GlassMode.liquid ? GlassMaterial.liquid() : GlassMaterial.blur();
+});
+
+// lib/app.dart：注入到根部，全站玻璃控件即时跟随
+GlassScope(material: material, child: MediaQuery(...))
+```
+
+* 材质写入 Hive（`AppSettings.glassMode`，**按枚举名存字符串**，跨版本最稳）；
+* 切换后 Riverpod 通知 → `GlassScope` 更新 → 所有 `BlurContainer` / `BlurButton` /
+  `BlurBar` / 弹窗即时重建，**无需重启**；
+* 1.0.x 老用户升级时，Hive 记录里没有这两个字段，
+  `AppSettingsAdapter.read` 已做**向后兼容回落**（默认液态玻璃），不会崩。
+
+#### ③ 全文页自动滚动（bug 修复 + 默认关闭）
+
+```dart
+// ❌ 1.x：内容一就绪就自动开滚，导致用户点「暂停」后下一次重建又滚起来 → 停不掉
+if (contentAsync.hasValue) _scheduleAutoScroll();
+
+// ✅ 2.0.0：默认不动，只有用户点按钮才启动；判据唯一（计时器是否存在）
+static const bool autoScrollByDefault = false;
+void _toggleAutoScroll() {
+  if (_autoScrollTimer == null) { _startAutoScroll(); } else { _stopAutoScroll(); }
+}
+```
+
+另外：切换文章时主动停表；滚到底部自动停；`_onScroll` 不再干扰用户手动滑动。
+
+#### ④ 统一 APK 签名（荣耀/华为安装器提示「签名不一致」）
+
+1.x 用 AGP 默认 debug 签名 —— 密钥随构建环境变化，而本机与 CodeMagic 是两个环境，
+覆盖安装时系统安装器会判定签名不同，要求先卸载旧版本（会丢数据）。
+
+现在仓库内固定一把密钥 `android/app/wentianxia-release.jks`，
+**debug 与 release 共用**，本地与 CI 产出的 APK 签名完全一致：
+
+```gradle
+def wentianxiaKeystore = file('wentianxia-release.jks')
+android {
+  signingConfigs { if (wentianxiaKeystore.exists()) { wentianxia { ... } } }
+  buildTypes {
+    release { signingConfig = signingConfigs.wentianxia }
+    debug   { signingConfig = signingConfigs.wentianxia }
+  }
+}
+```
+
+> 过渡提示：1.0.x 的旧包用的是**另一把** debug 密钥，因此**这一次**升级仍需卸载一次
+> （或者先导出收藏/重新填 API Key）；从 2.0.0 之后的所有版本都可以直接覆盖安装。
+
+#### ⑤ 更新内容弹窗
+
+`lib/features/changelog/`：
+
+* `app_changelog.dart` —— 版本更新条目（当前 `2.0.0`）；
+* `changelog_dialog.dart` —— `AppChangelogGate` 挂在 `MaterialApp.builder` 内，
+  首帧后比较 `AppSettings.lastSeenVersion` 与当前版本，不同则弹出更新内容，
+  用户点「开始使用」后写回记录；设置页也可手动打开。
 
 ### 1.0.1 修复详情
 

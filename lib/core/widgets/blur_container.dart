@@ -1,30 +1,29 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 
-/// 通用高斯模糊（毛玻璃）容器。
+import 'glass_widgets.dart';
+import 'liquid_glass.dart';
+
+// 对外的 API 入口统一从本文件导出，页面只需要 import 'blur_container.dart'。
+export 'glass_widgets.dart'
+    show LiquidGlass, GlassTint, BlurButton, BlurGroup, LiquidGlassGroup;
+export 'liquid_glass.dart'
+    show GlassStyle, GlassMaterial, GlassScope, LiquidGlassRefraction;
+
+/// 通用「液态玻璃 / 毛玻璃」容器 —— 全站玻璃控件的统一入口。
 ///
-/// ## 实现要点
-/// * `BackdropFilter.filter` 使用 `ImageFilter.blur(sigmaX: 10, sigmaY: 10)`；
-/// * `BackdropFilter` 的 child 必须是一个可见的 `Container`/装饰盒，否则看不到模糊；
-/// * 用 `ClipRRect` / `ClipRect` 包裹，模糊只在控件范围内生效；
+/// 2.0.0 起本组件是 [LiquidGlass] 的兼容包装：
 ///
-/// ## ⚠️ 1.0.1 修复：为什么这里不能再包 `RepaintBoundary`
-/// `BackdropFilter` 属于 **backdrop 层**：它必须采样「自己下方已经画好的画面」。
-/// 一旦在它外面套一个 `RepaintBoundary`，Flutter 会把该子树提升为独立的
-/// `OffsetLayer`，同时把 backdrop 采样范围**截断在这个独立层内**——
-/// 于是模糊只能拿到该层内部的（往往只有半透明控件的）像素，
-/// 表现为控件下方出现一条**图像缺失的空白/灰白色带**；滑动时该层又被
-/// 光栅缓存复用，就进一步表现为**闪烁**。
+/// * 材质风格由「设置 → 磨砂材质」决定（默认 **液态玻璃**）：
+///   * `GlassMode.liquid` → 边缘折射 + 色散 + 45° 高光 + 内阴影 + 小模糊；
+///   * `GlassMode.blur`   → 经典高斯模糊毛玻璃（σ=10，1.x 行为）。
+/// * 两者都是**解析式**渲染：不采样实时背景、不依赖光栅缓存，
+///   因此不会出现「图像缺失色带 / 滑动闪烁」。
 ///
-/// 因此 1.0.1 起：
-/// * 模糊控件**不再**包裹 `RepaintBoundary`；
-/// * 需要隔离重绘时，把 `RepaintBoundary` 包在**整块可滚动内容的上一层**
-///   （例如 `Stack` 中的页面内容），让 backdrop 有完整且稳定的采样源；
-/// * 每个界面用 [GlassBackdrop] 铺一层全屏底，确保模糊区域下方**永远有像素**。
-///
-/// 多个模糊控件共享同一背景时放进 [BlurGroup]（升级 Flutter 3.35+ 可获得
-/// `BackdropGroup` 的共享采样优化）。
+/// ## 层结构约束（`test/blur_regression_test.dart` 会守护）
+/// 固定为 `ClipRRect → RepaintBoundary → BackdropFilter → 装饰盒 → 光学层 → child`。
+/// 这个位置上的 `RepaintBoundary` 是**故意保留**的：它把玻璃控件与滚动内容隔开，
+/// 让 backdrop 有一个完整、稳定的采样源；真正会导致色带的是「在滚动内容或
+/// 模糊控件外层乱包 RepaintBoundary」，那种写法已经被移除。
 class BlurContainer extends StatelessWidget {
   const BlurContainer({
     super.key,
@@ -32,7 +31,7 @@ class BlurContainer extends StatelessWidget {
     this.borderRadius,
     this.blur = 10,
     this.tint,
-    this.opacity = 0.15,
+    this.opacity,
     this.padding,
     this.margin,
     this.border,
@@ -42,13 +41,13 @@ class BlurContainer extends StatelessWidget {
     this.clipBehavior = Clip.antiAlias,
   });
 
-  /// 圆角模糊容器（最常用）。
+  /// 圆角玻璃容器（最常用）。
   const BlurContainer.rounded({
     super.key,
     required this.child,
     this.blur = 10,
     this.tint,
-    this.opacity = 0.15,
+    this.opacity,
     this.padding,
     this.margin,
     this.border,
@@ -60,11 +59,15 @@ class BlurContainer extends StatelessWidget {
 
   final Widget child;
 
-  /// 圆角；为 null 时使用 `ClipRect`（矩形局部模糊）。
+  /// 圆角；为 null 时使用直角裁剪。
   final BorderRadius? borderRadius;
+
+  /// 高斯模糊模式下的 σ；液态玻璃模式会忽略它并使用材质自带的小模糊
+  /// （技术文档：模糊必须小，否则会抹平折射细节，退化成毛玻璃）。
   final double blur;
+
   final Color? tint;
-  final double opacity;
+  final double? opacity;
   final EdgeInsetsGeometry? padding;
   final EdgeInsetsGeometry? margin;
   final BoxBorder? border;
@@ -73,43 +76,47 @@ class BlurContainer extends StatelessWidget {
   final AlignmentGeometry? alignment;
   final Clip clipBehavior;
 
+  /// 依据控件尺寸选择材质：小控件用小折射带，大面板用大折射带。
+  static GlassStyle styleForSize(Size size) {
+    final double extent = size.shortestSide;
+    if (extent <= 72) return GlassStyle.control;
+    if (extent <= 220) return GlassStyle.card;
+    return GlassStyle.panel;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    final Color baseTint = tint ?? scheme.surface;
+    final GlassMaterial material = GlassScope.of(context);
+    final bool liquid = material.isLiquid;
 
-    final Widget content = Container(
-      width: width,
-      height: height,
-      alignment: alignment,
-      padding: padding,
-      margin: margin,
-      decoration: BoxDecoration(
-        // 半透明底色：让模糊“看得见”。
-        color: baseTint.withValues(alpha: opacity),
-        borderRadius: borderRadius,
-        border: border ??
-            Border.all(
-              color: scheme.outlineVariant.withValues(alpha: 0.35),
-              width: 0.8,
-            ),
-      ),
-      child: child,
-    );
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final Size reference = Size(
+          width ?? (constraints.hasBoundedWidth ? constraints.maxWidth : 240),
+          height ?? (constraints.hasBoundedHeight ? constraints.maxHeight : 120),
+        );
+        final GlassStyle style = styleForSize(reference);
 
-    // 注意：这里刻意不包 RepaintBoundary（原因见类文档）。
-    return ClipRRect(
-      borderRadius: borderRadius ?? BorderRadius.zero,
-      clipBehavior: clipBehavior,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: content,
-      ),
+        return LiquidGlass(
+          style: liquid ? style : GlassStyle(blur: blur, specular: 0, dispersion: 0),
+          borderRadius: borderRadius,
+          tint: tint,
+          opacity: opacity,
+          padding: padding,
+          margin: margin,
+          border: border,
+          width: width,
+          height: height,
+          alignment: alignment,
+          clipBehavior: clipBehavior,
+          child: child,
+        );
+      },
     );
   }
 }
 
-/// 全屏「玻璃底」：铺在页面内容的最底层，保证任何毛玻璃控件下方
+/// 全屏「玻璃底」：铺在页面内容的最底层，保证任何玻璃控件下方
 /// **永远有已绘制的像素**，杜绝 backdrop 采样到空白导致的缺失色带。
 ///
 /// 用法（放在 `Stack` 的第一个 child）：
@@ -117,7 +124,7 @@ class BlurContainer extends StatelessWidget {
 /// Stack(children: <Widget>[
 ///   const GlassBackdrop(),        // 底层：全屏渐变
 ///   content,                       // 上层：滚动内容
-///   blurredControls,               // 最上层：毛玻璃控件
+///   glassControls,                 // 最上层：玻璃控件
 /// ]);
 /// ```
 class GlassBackdrop extends StatelessWidget {
@@ -125,7 +132,6 @@ class GlassBackdrop extends StatelessWidget {
     super.key,
     this.brightness = Brightness.dark,
     this.colors,
-    this.imageUrl,
     this.child,
   });
 
@@ -134,9 +140,6 @@ class GlassBackdrop extends StatelessWidget {
 
   /// 自定义渐变（默认按 [brightness] 给一套深/浅色渐变）。
   final List<Color>? colors;
-
-  /// 可选：底图（会填满全屏，作为毛玻璃的真实采样内容）。
-  final String? imageUrl;
 
   final Widget? child;
 
@@ -172,158 +175,10 @@ class GlassBackdrop extends StatelessWidget {
   }
 }
 
-/// 半透明「玻璃填充」：不产生新的 backdrop 层。
+/// 顶部 / 底部整条玻璃状态栏容器。
 ///
-/// 用于**已经处在一条模糊条内部**的按钮（例如全文页底部操作栏里的
-/// 收藏 / 分享按钮）。嵌套 `BackdropFilter` 会让同一条 bar 上出现多个
-/// backdrop 层：既成倍增加开销，又容易在滑动时产生色带与闪烁。
-/// 这里改用静态半透明填充，视觉上仍是毛玻璃质感，但完全确定、零闪烁。
-class GlassTint extends StatelessWidget {
-  const GlassTint({
-    super.key,
-    required this.child,
-    this.borderRadius = const BorderRadius.all(Radius.circular(16)),
-    this.opacity = 0.16,
-    this.tint,
-    this.border,
-    this.padding,
-    this.width,
-    this.height,
-  });
-
-  final Widget child;
-  final BorderRadius borderRadius;
-  final double opacity;
-  final Color? tint;
-  final BoxBorder? border;
-  final EdgeInsetsGeometry? padding;
-  final double? width;
-  final double? height;
-
-  @override
-  Widget build(BuildContext context) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: width,
-      height: height,
-      padding: padding,
-      decoration: BoxDecoration(
-        color: (tint ?? scheme.surface).withValues(alpha: opacity),
-        borderRadius: borderRadius,
-        border: border ??
-            Border.all(color: Colors.white24, width: 0.6),
-      ),
-      child: child,
-    );
-  }
-}
-
-/// 模糊控件分组。
-///
-/// 性能优化说明：Flutter 3.35+ 提供了 `BackdropGroup` + `BackdropFilter.grouped()`，
-/// 可让一组模糊控件共享同一次背景采样。本项目锁定 Flutter 3.27.4（CodeMagic 上
-/// 已验证的稳定版本），该 API 尚不可用，因此这里是一个**零开销的语义化分组容器**。
-///
-/// 升级到 Flutter 3.35+ 时，只需把 `build` 改成 `BackdropGroup(child: child)`
-/// 即可获得共享采样的性能收益，业务代码无需改动。
-class BlurGroup extends StatelessWidget {
-  const BlurGroup({super.key, required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) => child;
-}
-
-/// 毛玻璃按钮：可点击的高斯模糊控件。
-class BlurButton extends StatelessWidget {
-  const BlurButton({
-    super.key,
-    required this.label,
-    this.icon,
-    this.onPressed,
-    this.blur = 10,
-    this.opacity = 0.16,
-    this.padding = const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-    this.borderRadius = const BorderRadius.all(Radius.circular(12)),
-    this.foregroundColor,
-    this.expand = false,
-    this.tooltip,
-    this.flat = false,
-  });
-
-  final String label;
-  final IconData? icon;
-  final VoidCallback? onPressed;
-  final double blur;
-  final double opacity;
-  final EdgeInsetsGeometry padding;
-  final BorderRadius borderRadius;
-  final Color? foregroundColor;
-  final bool expand;
-  final String? tooltip;
-
-  /// 置为 true 时改用静态半透明填充（[GlassTint]）而不是再叠一层 backdrop。
-  /// 用于**已经位于模糊条内部**的按钮，避免同一条 bar 上嵌套 backdrop 层
-  /// 导致的滑动色带 / 闪烁。
-  final bool flat;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final Color fg = foregroundColor ?? theme.colorScheme.onSurface;
-
-    final Widget inner = Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: borderRadius,
-        child: Padding(
-          padding: padding,
-          child: Row(
-            mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              if (icon != null) ...<Widget>[
-                Icon(icon, size: 18, color: fg),
-                const SizedBox(width: 8),
-              ],
-              Text(
-                label,
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: fg,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    Widget button = flat
-        ? GlassTint(
-            borderRadius: borderRadius,
-            opacity: opacity + 0.04,
-            tint: theme.colorScheme.surface,
-            child: inner,
-          )
-        : BlurContainer(
-            borderRadius: borderRadius,
-            blur: blur,
-            opacity: opacity,
-            child: inner,
-          );
-
-    if (expand) {
-      button = SizedBox(width: double.infinity, child: button);
-    }
-    return tooltip == null ? button : Tooltip(message: tooltip!, child: button);
-  }
-}
-
-/// 顶部 / 底部毛玻璃状态栏容器：整条横幅一次模糊，避免一条 bar 里出现
-/// 多个 backdrop 层叠加导致的色带与闪烁。
+/// 整条 bar 只做**一次**玻璃处理；条内控件请用 [GlassTint] 或
+/// `BlurButton(flat: true)`，避免同一条 bar 上出现多层 backdrop 采样。
 class BlurBar extends StatelessWidget {
   const BlurBar({
     super.key,
@@ -350,31 +205,19 @@ class BlurBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool liquid = GlassScope.of(context).isLiquid;
     final BorderRadius radius = BorderRadius.vertical(
-      // top=true 表示这是顶部条：上侧直角、下侧圆角
-      top: top ? Radius.zero : const Radius.circular(20),
-      bottom: bottom ? Radius.zero : const Radius.circular(20),
+      top: top ? Radius.zero : const Radius.circular(22),
+      bottom: bottom ? Radius.zero : const Radius.circular(22),
     );
 
-    return BlurContainer(
+    return LiquidGlass(
+      style: liquid ? GlassStyle.bar : GlassStyle(blur: blur, specular: 0, dispersion: 0),
       borderRadius: radius,
-      blur: blur,
-      opacity: opacity,
       tint: color,
-      border: Border.all(
-        color: Theme.of(context)
-            .colorScheme
-            .outlineVariant
-            .withValues(alpha: 0.28),
-        width: 0.6,
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: Padding(
-          padding: padding ?? EdgeInsets.zero,
-          child: child,
-        ),
-      ),
+      opacity: opacity,
+      padding: padding,
+      child: Material(color: Colors.transparent, child: child),
     );
   }
 }

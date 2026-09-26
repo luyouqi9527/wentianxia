@@ -6,6 +6,8 @@ import '../../../core/widgets/blur_container.dart';
 import '../../../shared/hive/app_settings.dart';
 import '../../../shared/hive/hive_service.dart';
 import '../../../shared/hive/settings_provider.dart';
+import '../../changelog/app_changelog.dart';
+import '../../changelog/changelog_dialog.dart';
 import '../../news/data/news_channels.dart';
 import '../../onboarding/widgets/interest_selector.dart';
 
@@ -73,6 +75,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final ThemeData theme = Theme.of(context);
     final HiveService hive = ref.watch(hiveServiceProvider);
     final DateTime? lastRefresh = hive.lastRefreshAt;
+    final GlassMode glassMode = ref.watch(glassModeProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
@@ -165,6 +168,90 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
           ),
           const SizedBox(height: 16),
+          // ------------------------------------------------ 2.0.0 磨砂材质切换
+          BlurContainer(
+            borderRadius: BorderRadius.circular(20),
+            opacity: 0.12,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    const Icon(Icons.blur_on, size: 18),
+                    const SizedBox(width: 8),
+                    Text('磨砂材质', style: theme.textTheme.titleMedium),
+                    const Spacer(),
+                    Text(
+                      glassMode.label,
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '液态玻璃：圆角矩形 SDF + Snell 折射剖面，做出边缘折射、'
+                  '色散、45° 边缘高光与内阴影（模糊保持很小，避免抹平折射细节）。',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SegmentedButton<GlassMode>(
+                  segments: GlassMode.values
+                      .map(
+                        (GlassMode mode) => ButtonSegment<GlassMode>(
+                          value: mode,
+                          label: Text(mode.label),
+                          icon: Icon(
+                            mode == GlassMode.liquid
+                                ? Icons.water_drop_outlined
+                                : Icons.filter_none,
+                          ),
+                        ),
+                      )
+                      .toList(growable: false),
+                  selected: <GlassMode>{glassMode},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (Set<GlassMode> selection) async {
+                    final GlassMode next = selection.first;
+                    await ref.read(settingsActionsProvider).setGlassMode(next);
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context)
+                      ..hideCurrentSnackBar()
+                      ..showSnackBar(
+                        SnackBar(
+                          duration: const Duration(seconds: 1),
+                          content: Text('已切换为「${next.label}」'),
+                        ),
+                      );
+                  },
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        glassMode.description,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () =>
+                          showChangelogDialog(context, release: AppChangelog.current),
+                      icon: const Icon(Icons.history, size: 16),
+                      label: const Text('更新内容'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
           BlurContainer(
             borderRadius: BorderRadius.circular(20),
             blur: 10,
@@ -188,6 +275,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 _InfoRow(
                   label: '本地收藏',
                   value: '${hive.favorites().length} 条',
+                ),
+                const _InfoRow(
+                  label: '应用版本',
+                  value: 'v${AppChangelog.currentVersion}',
                 ),
                 _InfoRow(
                   label: '频道列表',

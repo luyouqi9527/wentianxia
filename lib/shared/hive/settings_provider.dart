@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive/hive.dart';
 
+import '../../core/widgets/liquid_glass.dart';
 import '../../features/news/providers/news_provider.dart';
 import '../../features/news/repositories/news_repository.dart';
 import 'app_settings.dart';
@@ -29,7 +30,21 @@ final Provider<AppSettings> currentSettingsProvider =
   return async.valueOrNull ?? ref.watch(hiveServiceProvider).readSettings();
 });
 
-/// 更新 API Key（设置页使用），同时刷新新闻数据。
+/// 当前磨砂材质风格（设置里可切换：液态玻璃 / 高斯模糊）。
+final Provider<GlassMode> glassModeProvider = Provider<GlassMode>((Ref ref) {
+  return ref.watch(currentSettingsProvider).glassMode;
+});
+
+/// 由 [GlassMode] 解析出的实际渲染材质，注入到根部的 [GlassScope]。
+final Provider<GlassMaterial> glassMaterialProvider =
+    Provider<GlassMaterial>((Ref ref) {
+  final GlassMode mode = ref.watch(glassModeProvider);
+  return mode == GlassMode.liquid
+      ? GlassMaterial.liquid()
+      : GlassMaterial.blur();
+});
+
+/// 更新 API Key / 兴趣频道（设置页使用），同时刷新新闻数据。
 final Provider<SettingsActions> settingsActionsProvider =
     Provider<SettingsActions>((Ref ref) => SettingsActions(ref));
 
@@ -42,12 +57,30 @@ class SettingsActions {
     required String apiKey,
     required List<String> categories,
   }) async {
-    await _ref.read(hiveServiceProvider).completeOnboarding(
-          apiKey: apiKey,
-          categories: categories,
-        );
+    final HiveService hive = _ref.read(hiveServiceProvider);
+    final AppSettings current = hive.readSettings();
+    await hive.saveSettings(
+      await hive.completeOnboarding(
+        apiKey: apiKey,
+        categories: categories,
+      ).then((AppSettings s) => s.copyWith(glassMode: current.glassMode)),
+    );
     // API Key / 频道变化后强制重新拉取新闻。
     _ref.invalidate(newsRepositoryProvider);
     await _ref.read(newsFeedControllerProvider.notifier).refresh();
+  }
+
+  /// 切换磨砂材质（无需重启，界面即时重建）。
+  Future<void> setGlassMode(GlassMode mode) async {
+    final HiveService hive = _ref.read(hiveServiceProvider);
+    await hive.saveSettings(hive.readSettings().copyWith(glassMode: mode));
+  }
+
+  /// 标记「更新内容」弹窗已阅读。
+  Future<void> markVersionSeen(String version) async {
+    final HiveService hive = _ref.read(hiveServiceProvider);
+    await hive.saveSettings(
+      hive.readSettings().copyWith(lastSeenVersion: version),
+    );
   }
 }
