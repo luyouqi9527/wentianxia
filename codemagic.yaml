@@ -1,18 +1,26 @@
 # CodeMagic CI/CD 配置 —— 闻天下（Flutter Android）
 #
-# 使用方式：把整个项目目录推到 Git 仓库后，在 CodeMagic 里选择该仓库，
-# CodeMagic 会自动读取本文件并出现 "wentianxia-android" 工作流。
+# 使用方式：把仓库连到 CodeMagic，它会自动读取本文件并出现 "wentianxia-android" 工作流。
 #
-# 当前版本：2.0.0+3（液态玻璃材质 + 材质切换开关 + 自动滚动修复 + 固定签名 + 更新内容弹窗）
-# 版本组合与本地验证环境保持一致：
-#   Flutter 3.27.4（Dart 3.6.2） + Java 17 + Gradle 8.7 + AGP 8.6.0 + Kotlin 1.9.24
+# ── 3.0.0 起的版本基线（重要）──────────────────────────────────────────────
+# Flutter 3.47.5（Dart 3.13.4） + Java 17 + Gradle 8.7 + AGP 8.6.0 + Kotlin 1.9.24
+#
+# 为什么必须 ≥ 3.29：液态玻璃的「真·背景折射」依赖
+#   dart:ui 的 `ImageFilter.shader(FragmentShader)`，
+#   该 API 自 Flutter 3.29 起提供（3.27 上不存在），并且只在 Impeller 下可用。
+# 项目还用到 3.29+ 的 `BackdropGroup` / `BackdropFilter.grouped()`。
+# 3.38+ 才修好 `ImageFilter.blur` 与 `ImageFilter.shader` 在同一 filter 里组合的问题，
+# 因此本项目用「两层 BackdropFilter 叠加」的稳妥写法（官方文档与
+# liquid_glass_renderer 都是这么做的），不依赖该修复。
+#
+# 若你的 CodeMagic 账号还没有 3.47.5 这个镜像，可改成 3.44.x / 3.41.x（同样满足 ≥3.29）。
 workflows:
   wentianxia-android:
     name: 闻天下 Android Build
     max_build_duration: 60
     instance_type: mac_mini_m2
     environment:
-      flutter: 3.27.4
+      flutter: 3.47.5
       # AGP 8.6 / Gradle 8.7 需要 JDK 17。
       java: 17
     cache:
@@ -35,8 +43,15 @@ workflows:
         script: flutter analyze
       - name: Unit tests
         script: flutter test
+      # 液态玻璃着色器会被打包进 flutter_assets/shaders/，
+      # 这一步顺带验证 shaders/liquid_glass.frag 能被 impellerc 编译通过。
       - name: Build release APKs
         script: flutter build apk --release
+      - name: Verify shader was bundled
+        script: |
+          set -e
+          unzip -l build/app/outputs/flutter-apk/app-release.apk | grep -i "shaders/liquid_glass.frag" \
+            || (echo "❌ 着色器没有打进包里，检查 pubspec.yaml 的 flutter: shaders: 配置" && exit 1)
     artifacts:
       - build/app/outputs/flutter-apk/app-release.apk
       - build/app/outputs/flutter-apk/*.apk

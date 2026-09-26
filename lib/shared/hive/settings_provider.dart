@@ -1,5 +1,7 @@
+import 'dart:ui';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:hive/hive.dart';
+import 'package:hive_ce/hive.dart';
 
 import '../../core/widgets/liquid_glass.dart';
 import '../../features/news/providers/news_provider.dart';
@@ -43,6 +45,17 @@ final Provider<GlassMaterial> glassMaterialProvider =
       ? GlassMaterial.liquid()
       : GlassMaterial.blur();
 });
+
+/// 液态玻璃的折射着色器程序（Skia / 加载失败时为 null → 自动降级为解析式折射）。
+///
+/// 在 `main()` 里只加载一次并覆盖本 Provider（见 `main.dart`），
+/// **同步**读取结果，保证首帧就是真折射，不会先闪一下毛玻璃再变。
+final Provider<FragmentProgram?> glassShaderProvider =
+    Provider<FragmentProgram?>(
+  (Ref ref) => throw UnimplementedError(
+    'glassShaderProvider 必须在 ProviderScope 中覆盖（见 main.dart）',
+  ),
+);
 
 /// 更新 API Key / 兴趣频道（设置页使用），同时刷新新闻数据。
 final Provider<SettingsActions> settingsActionsProvider =

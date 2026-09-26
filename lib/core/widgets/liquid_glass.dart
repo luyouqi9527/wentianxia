@@ -1,46 +1,32 @@
-/// 液态玻璃（Liquid Glass）视觉引擎。
-///
-/// 设计依据来自项目内的《液态玻璃实现技术文档》/《AI 速查卡》：
-///
-/// * **定义性特征**：液态玻璃 ≠ 毛玻璃。它的灵魂是**边缘折射透镜**
-///   （edge lensing）——面板边缘把背后的内容按 SDF 法线方向重采样并放大，
-///   中心保持不动；只有 `blur()` 的方案只能叫 glassmorphism（毛玻璃）。
-/// * **算法链**：圆角矩形 SDF → 归一化深度 `t = depth / bezel` → 位移剖面
-///   （凸超椭圆 `(1-(1-x)^4)^(1/4)` + Snell 2D 近似）→ 法线 `normalize(∇SDF)`
-///   → `sampleCoord = coord + normal × profile × scale` → 重采样。
-/// * **六层堆叠**（自下而上）：折射 → 模糊(saturate) → tint → 高光 →
-///   边缘光/色边 → 内容。**顺序铁律：折射在底层、模糊在其上，且模糊必须小
-///   （0~4px），否则会把折射细节抹平退化成毛玻璃。**
-/// * **参数默认值**：`bezel = clamp(min(w,h) × 0.12, 6, 28)`、
-///   位移 `= bezel × 1.6~2.0`、`blur = bezel × 0.15`、`saturation 1.3~1.6`、
-///   `tint alpha 0.06~0.15`、高光 45°/白 0.35~0.55、内阴影 alpha 0.12~0.18。
-///
-/// ## 本文件在 Flutter 上的落地方式（重要，避免“伪液态玻璃”）
-/// Flutter 的 `dart:ui` 只提供 `ImageFilter.blur/dilate/erode/matrix/compose`，
-/// **没有**开放的“采样 backdrop 纹理的自定义 ImageFilter”入口，因此
-/// `BackdropFilter` 无法直接把背景按位移场重采样。
-/// 本实现采用 **解析式折射** 路线（`LiquidGlassRefraction`）：
-///
-/// 1. 用与文档完全相同的 **圆角矩形 SDF** 计算每个像素的归一化深度 `t`；
-/// 2. 用文档里 `buildProfile()` 的同一套数学（凸超椭圆 + Snell n=1.5）
-///    算出边缘的位移量剖面；
-/// 3. 把“位移 → 采样偏移”这一物理结果**解析地**还原成视觉层：
-///    * 边缘放大/弯折 → 用径向渐变（`_LensEdgePainter`）在包围带内做出
-///      被放大、被弯折的亮度增量（凸透镜汇聚光 → 边缘更亮）；
-///    * 色散 → 冷暖双色 1px 描边（文档 1.5 节的“廉价替代方案”）；
-///    * 高光 → 由 `∇SDF` 与 45° 光源做点积得到的单侧镜面反射；
-///    * 内阴影 → 上暗下亮的 inset 渐变（玻璃厚度感）。
-///
-/// 这套实现是**纯解析、逐帧确定**的：不采样实时背景、不依赖光栅缓存，
-/// 因此天然不会出现“图像缺失色带 / 滑动闪烁”。
-/// 它也提供了 [GlassMode.blur] 作为经典高斯模糊回退（设置里可切换）。
-library;
-
 import 'dart:math' as math;
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
 import '../../shared/hive/app_settings.dart';
+
+// ============================================================================
+// 液态玻璃（Liquid Glass）视觉引擎
+// ============================================================================
+//
+// ## 关键能力：真·背景折射（Flutter 3.29+）
+// 从 Flutter **3.29** 起 `dart:ui` 提供了 `ImageFilter.shader(FragmentShader)`，
+// 而 `BackdropFilter` 接受它。引擎会把**背景纹理**绑到着色器的第 0 个
+// `sampler2D`、把纹理尺寸写进第 0 个 `vec2` uniform —— 于是着色器里可以
+// `texture(uBackdrop, coord + 位移)` **直接重采样真实背景**，这才是液态玻璃的
+// 定义性特征（边缘折射透镜），而不是只有 `blur()` 的毛玻璃。
+//
+// 本项目在 `shaders/liquid_glass.frag` 里用与文档一致的算法链实现：
+// 圆角矩形 SDF → 归一化深度 → 圆形倒角剖面（Snell 近似）→ 法线 × 位移
+// → R/G/B 微差采样（色散）→ 边缘高光 → 内阴影 → 提饱和。
+//
+// ## 三级降级（任何一级失败都不会崩、也不会抖动）
+// 1. `ImageFilter.shader` + Impeller → **真折射**；
+// 2. 着色器资产加载失败 / `ImageFilter.isShaderFilterSupported == false`
+//    （Skia）→ 回退到**解析式折射**（LiquidGlassRefraction，纯 CPU 数学，
+//    效果接近但背景不被重采样）；
+// 3. 用户把材质切成 GlassMode.blur → 经典高斯模糊毛玻璃。
+// ============================================================================
 
 /// 玻璃材质参数（照抄文档推荐值）。
 @immutable
@@ -86,7 +72,7 @@ class GlassStyle {
   /// 光源角度（文档默认 45°）。
   final double lightAngle;
 
-  /// 色散强度（0 = 关闭；Android 侧 7 次采样很贵，这里用冷暖描边近似）。
+  /// 色散强度（0 = 关闭）。
   final double dispersion;
 
   /// 内阴影 alpha（文档：0.12~0.18）。
@@ -194,6 +180,7 @@ class GlassStyle {
 /// ```
 /// 即 `depth/refractHeight = 0`（折射带内边界）→ 位移 0；
 /// `depth/refractHeight = 1`（边缘）→ 位移最大。
+/// 这是**解析式降级路径**用的实现（着色器路径在 `shaders/liquid_glass.frag`）。
 class LiquidGlassRefraction {
   const LiquidGlassRefraction._();
 
@@ -227,8 +214,7 @@ class LiquidGlassSdf {
   /// 中心点归一化深度（驱动折射剖面）。
   ///
   /// 返回值 `0..1`：`0` = 不折射（折射带以内，含面板中心），
-  /// `1` = 位移最大（已到面板边缘）。等价于 Kyant0 shader 里的
-  /// `circleMap` 参数：`位移 = circleMap(归一化深度) × refractionAmount`。
+  /// `1` = 位移最大（已到面板边缘）。
   ///
   /// 文档坑位 4：梯度半径必须用 `min(r × 1.5, min(halfW, halfH))`，
   /// 否则圆角处会出现放射状折痕。
@@ -294,13 +280,29 @@ class GlassMaterial {
   /// 高斯模糊：1.x 行为（σ=10，无折射）。
   factory GlassMaterial.blur([double sigma = 10]) => GlassMaterial(
         mode: GlassMode.blur,
-        style: GlassStyle(blur: sigma, specular: 0, dispersion: 0, innerShadow: 0.10),
+        style: GlassStyle(
+          blur: sigma,
+          specular: 0,
+          dispersion: 0,
+          innerShadow: 0.10,
+        ),
         enableRefraction: false,
         enableDispersion: false,
         enableSpecular: false,
         enableInnerShadow: true,
         blurSigma: sigma,
         saturation: 1,
+      );
+
+  GlassMaterial copyWith({GlassMode? mode, double? blurSigma}) => GlassMaterial(
+        mode: mode ?? this.mode,
+        style: style,
+        enableRefraction: enableRefraction,
+        enableDispersion: enableDispersion,
+        enableSpecular: enableSpecular,
+        enableInnerShadow: enableInnerShadow,
+        blurSigma: blurSigma ?? this.blurSigma,
+        saturation: saturation,
       );
 }
 
@@ -312,15 +314,33 @@ class GlassScope extends InheritedWidget {
   const GlassScope({
     super.key,
     required this.material,
+    this.shaderProgram,
     required super.child,
   });
 
   final GlassMaterial material;
 
+  /// 液态玻璃着色器程序（`shaders/liquid_glass.frag`）。
+  ///
+  /// 为 null 表示不可用（Skia / 资产加载失败 / 旧版本 Flutter），
+  /// 此时自动降级到解析式折射。
+  final FragmentProgram? shaderProgram;
+
+  /// 当前场景能否使用 shader 真折射。
+  bool get refractive =>
+      shaderProgram != null && material.isLiquid;
+
   static GlassMaterial of(BuildContext context) {
     final GlassScope? scope =
         context.dependOnInheritedWidgetOfExactType<GlassScope>();
     return scope?.material ?? GlassMaterial.liquid();
+  }
+
+  /// 取着色器程序（可能为 null → 走解析式降级）。
+  static FragmentProgram? programOf(BuildContext context) {
+    return context
+        .dependOnInheritedWidgetOfExactType<GlassScope>()
+        ?.shaderProgram;
   }
 
   /// 取当前材质并把样式替换为指定风格（面板 / 按钮 / 条 / 卡片）。
@@ -344,5 +364,53 @@ class GlassScope extends InheritedWidget {
   @override
   bool updateShouldNotify(GlassScope oldWidget) =>
       oldWidget.material.mode != material.mode ||
-      oldWidget.material.blurSigma != material.blurSigma;
+      oldWidget.material.blurSigma != material.blurSigma ||
+      oldWidget.shaderProgram != shaderProgram;
+}
+
+/// 液态玻璃着色器的加载与能力探测。
+///
+/// * 资产路径：`shaders/liquid_glass.frag`（见 pubspec.yaml 的 `flutter: shaders:`）
+/// * 只在 [FragmentProgram] 可用且引擎支持 shader 型 ImageFilter 时返回程序，
+///   否则返回 null 让调用方降级。
+class LiquidGlassShader {
+  const LiquidGlassShader._();
+
+  /// 着色器资产路径。
+  static const String assetPath = 'shaders/liquid_glass.frag';
+
+  static FragmentProgram? _cached;
+  static bool _attempted = false;
+
+  /// 当前引擎是否支持「用着色器做 ImageFilter」（Impeller）。
+  static bool get isSupported {
+    try {
+      return ImageFilter.isShaderFilterSupported;
+    } on Object {
+      return false;
+    }
+  }
+
+  /// 加载着色器（幂等，只真正加载一次）。
+  ///
+  /// 任何失败都返回 null，绝不抛出 —— 玻璃会自动走解析式降级。
+  static Future<FragmentProgram?> load() async {
+    if (_attempted) return _cached;
+    _attempted = true;
+    if (!isSupported) return null;
+    try {
+      _cached = await FragmentProgram.fromAsset(assetPath);
+    } on Object catch (error) {
+      debugPrint('[liquid_glass] 着色器加载失败，降级为解析式折射: $error');
+      _cached = null;
+    }
+    return _cached;
+  }
+
+  /// 供测试使用：重置缓存。
+  @visibleForTesting
+  static void resetForTest() {
+    _cached = null;
+    _attempted = false;
+  }
 }

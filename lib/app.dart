@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -17,6 +19,8 @@ class WentianxiaApp extends ConsumerWidget {
     // 磨砂材质（液态玻璃 / 高斯模糊）在这里注入，
     // 设置里切换后全站玻璃控件即时重建，无需重启。
     final GlassMaterial material = ref.watch(glassMaterialProvider);
+    // 折射着色器（可能为 null → 自动降级为解析式折射）
+    final FragmentProgram? glassShader = ref.watch(glassShaderProvider);
 
     return MaterialApp.router(
       title: '闻天下',
@@ -30,6 +34,7 @@ class WentianxiaApp extends ConsumerWidget {
         final MediaQueryData mq = MediaQuery.of(context);
         return GlassScope(
           material: material,
+          shaderProgram: glassShader,
           child: MediaQuery(
             data: mq.copyWith(
               textScaler: mq.textScaler.clamp(

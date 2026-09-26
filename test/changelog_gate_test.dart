@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hive/hive.dart';
+import 'package:hive_ce/hive.dart';
 
 import 'package:wentianxia/features/changelog/app_changelog.dart';
 import 'package:wentianxia/features/changelog/changelog_dialog.dart';
@@ -65,8 +65,8 @@ void main() {
 
     expect(find.text('更新内容'), findsOneWidget);
     expect(find.text('开始使用'), findsOneWidget);
-    // 条目内容应完整渲染在玻璃框内
-    expect(find.textContaining('安装/更新后首次打开现在会正常弹出'), findsOneWidget);
+    // 条目内容应完整渲染在玻璃框内（取当前版本第一条的一个片段）
+    expect(find.textContaining('真·背景折射'), findsOneWidget);
   });
 
   testWidgets('首次安装 → 展示「欢迎使用 闻天下」与使用提示', (WidgetTester tester) async {

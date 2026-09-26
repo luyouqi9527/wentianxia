@@ -1,5 +1,5 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
-import 'package:hive/hive.dart';
+import 'package:hive_ce/hive.dart';
 
 part 'news_article.freezed.dart';
 part 'news_article.g.dart';

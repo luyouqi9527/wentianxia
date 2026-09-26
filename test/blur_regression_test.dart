@@ -1,25 +1,27 @@
+import 'dart:ui' show FragmentProgram;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:wentianxia/core/widgets/blur_container.dart';
+import 'package:wentianxia/core/widgets/liquid_glass.dart';
 import 'package:wentianxia/features/news/views/article_detail_page.dart';
 import 'package:wentianxia/shared/hive/app_settings.dart';
 
-/// 玻璃控件层结构回归测试（1.0.1 修复 + 2.0.0 重构后的约定）。
+/// 玻璃控件层结构回归测试（1.0.1 修复 + 2.x/3.x 重构后的约定）。
 ///
 /// 背景：`BackdropFilter` 依赖「自己下方已绘制的像素」。如果在它外层乱包
-/// `RepaintBoundary`，flutter 会把子树提升为独立层，backdrop 采样范围被截断，
+/// `RepaintBoundary`，Flutter 会把子树提升为独立层，backdrop 采样范围被截断，
 /// 表现为控件下方出现**图像缺失的空白带**并随滚动**闪烁**。
 ///
-/// 2.0.0 约定的层结构（唯一允许的形态）：
+/// 3.0.0 约定的层结构（唯一允许的形态）：
 ///
 /// ```text
-/// ClipRRect → RepaintBoundary → BackdropFilter → 装饰盒 → 光学层 → child
+/// ClipRRect → RepaintBoundary → [BackdropFilter(blur) → BackdropFilter(shader)] → 装饰盒 → child
 /// ```
 ///
-/// 即：`ClipRRect` 与 `RepaintBoundary` 之间、以及 `BackdropFilter` 与
-/// `RepaintBoundary` 之间都不允许再出现第二个 `RepaintBoundary`，
-/// 且 `RepaintBoundary` 必须在 `BackdropFilter` 上方且恰好一个。
+/// 即：两层 `BackdropFilter`（下层背景模糊、上层 shader 真折射）**共用同一个**
+/// `RepaintBoundary`；绝不允许每层各包一个，否则 backdrop 采样会被切成两段。
 void main() {
   Future<void> pumpGlass(WidgetTester tester, Widget child) async {
     await tester.pumpWidget(
@@ -40,8 +42,8 @@ void main() {
     );
   }
 
-  /// 断言：从 `BackdropFilter` 往上到页面 `Stack` 之间，`RepaintBoundary` 恰好一个。
-  void expectSingleBoundaryAboveBackdropFilter(WidgetTester tester) {
+  /// 断言：从 `BackdropFilter` 往上到页面 `Stack` 之间，`RepaintBoundary` 至多 1 个。
+  void expectBoundedRepaintBoundaries(WidgetTester tester) {
     final Iterable<Element> backdropFilters =
         find.byType(BackdropFilter).evaluate();
     expect(backdropFilters, isNotEmpty, reason: '玻璃控件必须包含 BackdropFilter');
@@ -75,7 +77,7 @@ void main() {
 
     expect(find.byType(BackdropFilter), findsOneWidget);
     expect(find.byType(ClipRRect), findsWidgets);
-    expectSingleBoundaryAboveBackdropFilter(tester);
+    expectBoundedRepaintBoundaries(tester);
   });
 
   testWidgets('BlurButton：普通形态有 backdrop 层，flat 形态没有',
@@ -96,7 +98,7 @@ void main() {
     expect(find.text('切换频道'), findsOneWidget);
     // 非 flat 的按钮产生 backdrop 层；flat 的按钮用静态填充，不产生
     expect(find.byType(BackdropFilter), findsOneWidget);
-    expectSingleBoundaryAboveBackdropFilter(tester);
+    expectBoundedRepaintBoundaries(tester);
   });
 
   testWidgets('GlassBackdrop 铺满全屏并绘制渐变（玻璃区域的兜底采样源）',
@@ -139,21 +141,20 @@ void main() {
 
   group('液态玻璃折射数学（与《液态玻璃实现技术文档》一致）', () {
     test('圆角矩形 SDF：内部为负、边界为 0、外部为正', () {
-      // 中心
       final double center = LiquidGlassSdf.sdRoundedRect(
         Offset.zero,
         const Size(100, 50),
         20,
       );
       expect(center, lessThan(0));
-      // 右侧边界（半宽 100 → 圆角半径内）
+
       final double edge = LiquidGlassSdf.sdRoundedRect(
         const Offset(100, 0),
         const Size(100, 50),
         20,
       );
       expect(edge, closeTo(0, 0.001));
-      // 外部
+
       final double outside = LiquidGlassSdf.sdRoundedRect(
         const Offset(140, 0),
         const Size(100, 50),
@@ -175,7 +176,6 @@ void main() {
 
     test('归一化深度：折射带内边界为 0（不动）、越靠边越接近 1', () {
       const Size size = Size(200, 120);
-      // 折射带内边界（离边缘正好 refractHeight）：归一化深度 ≈ 0 → 不折射
       final double atBandInner = LiquidGlassSdf.normalizedDepth(
         const Offset(96, 0),
         size,
@@ -184,7 +184,6 @@ void main() {
       );
       expect(atBandInner, closeTo(0.0, 0.02));
 
-      // 更靠外：归一化深度变大
       final double nearEdge = LiquidGlassSdf.normalizedDepth(
         const Offset(99, 0),
         size,
@@ -193,7 +192,6 @@ void main() {
       );
       expect(nearEdge, greaterThan(atBandInner));
 
-      // 面板中心：超出折射带 → 0（shader 会原样采样，中心不动）
       final double center = LiquidGlassSdf.normalizedDepth(
         Offset.zero,
         size,
@@ -223,6 +221,29 @@ void main() {
       expect(blur.enableRefraction, isFalse);
       expect(blur.enableSpecular, isFalse);
       expect(blur.blurSigma, 10);
+    });
+  });
+
+  group('着色器真折射的能力探测与降级', () {
+    test('着色器资产路径固定，且加载失败时返回 null 而不抛异常', () async {
+      expect(LiquidGlassShader.assetPath, 'shaders/liquid_glass.frag');
+      // 测试环境（flutter_tester / Skia）通常不支持 shader 型 ImageFilter；
+      // 无论支持与否，load() 都**不得抛异常**：要么返回程序，要么返回 null。
+      LiquidGlassShader.resetForTest();
+      final FragmentProgram? program = await LiquidGlassShader.load();
+      if (!LiquidGlassShader.isSupported) {
+        expect(program, isNull, reason: '不支持时必须安静地返回 null 以便降级');
+      }
+      LiquidGlassShader.resetForTest();
+    });
+
+    test('GlassScope 在没有着色器时判定为不可折射', () {
+      final GlassMaterial material = GlassMaterial.liquid();
+      final GlassScope scope = GlassScope(
+        material: material,
+        child: const SizedBox.shrink(),
+      );
+      expect(scope.refractive, isFalse, reason: 'shaderProgram 为 null → 必须降级');
     });
   });
 

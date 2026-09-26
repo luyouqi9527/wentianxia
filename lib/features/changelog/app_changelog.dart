@@ -20,7 +20,7 @@ class AppChangelog {
   const AppChangelog._();
 
   /// 当前版本号（与 pubspec.yaml 保持一致）。
-  static const String currentVersion = '2.0.1';
+  static const String currentVersion = '3.0.0';
 
   /// 首次安装时的引导内容（不是「更新」，所以单独一套文案）。
   static const AppRelease welcome = AppRelease(
@@ -36,6 +36,16 @@ class AppChangelog {
   );
 
   static const List<AppRelease> releases = <AppRelease>[
+    AppRelease(
+      version: '3.0.0',
+      date: '2026-02',
+      highlights: <String>[
+        '液态玻璃升级为「真·背景折射」：改用着色器直接重采样玻璃背后的真实内容，边缘放大/弯折是真的（不再是数学近似）',
+        '同步升级到 Flutter 3.47.5，拿到 BackdropGroup 共享采样，多个玻璃控件只采样一次背景',
+        '保留三级降级：设备不支持着色器时自动回退到近似折射 / 高斯模糊，不会崩也不会跳变',
+        '玻璃滑动时的闪烁进一步减少（新版引擎修掉了滚动纹理错位问题）',
+      ],
+    ),
     AppRelease(
       version: '2.0.1',
       date: '2026-02',

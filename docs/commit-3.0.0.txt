@@ -1,0 +1,55 @@
+feat(3.0.0): 升级 Flutter 3.47.5 + 液态玻璃改为 shader 真·背景折射
+
+一、为什么升级
+dart:ui 自 Flutter 3.29 起提供 ImageFilter.shader(FragmentShader)，且 BackdropFilter
+接受它：引擎会把背景纹理绑到着色器第 0 个 sampler2D、把纹理尺寸写进第 0 个 vec2
+uniform（这两个值禁止 Dart 侧设置）。于是着色器里 texture(uBackdrop, coord+位移)
+可以**重采样真实背景像素** —— 这才是液态玻璃的定义性特征（边缘折射透镜）。
+原基线 3.27.4 没有该 API（实测 painting.dart 只有 blur/dilate/erode/matrix/compose），
+所以 1.x/2.x 只能用数学等价的解析式近似。3.29+ 同时提供 BackdropGroup 共享采样。
+
+二、着色器（shaders/liquid_glass.frag）
+与《液态玻璃实现技术文档》第 1 章、Kyant0 的 AGSL 实现逐条对应：
+圆角矩形 SDF → 归一化深度 t=depth/refractHeight → circleMap（圆形倒角 + Snell 近似）
+→ 法线 normalize(∇SDF)（梯度半径用 min(r×1.5, min(halfW,halfH)) 避开圆角放射状折痕）
+→ sampleCoord = coord + grad × d → 重采样 → R/G/B 微差采样（色散）
+→ abs(dot(grad, light)) 的 45° 双面边缘高光 → 内阴影 → 提饱和 → 中心压暗。
+uniform 索引：0/1 = uSize（引擎写），2..10 = Dart 设置的玻璃参数。
+
+三、三层降级（任何一层失败都不会崩、也不会跳变）
+1. Impeller + 着色器加载成功 + 材质=液态玻璃 → ImageFilter.shader 真折射；
+2. Skia / 加载失败 / isShaderFilterSupported=false → 解析式折射（_LiquidGlassPainter）；
+3. 设置里选高斯模糊 → ImageFilter.blur(σ=10)。
+真折射走**两层 BackdropFilter 叠加**（下层 blur、上层 shader），
+刻意不用 ImageFilter.compose —— blur 与 shader 同 filter 在 3.38 前是坏的
+（flutter#170820），叠两层是官方文档与 liquid_glass_renderer 的稳妥做法。
+着色器在 main() 里只加载一次并覆盖 Provider，保证首帧即真折射。
+
+四、代码生成工具链迁移（被动，但解除了长期锁）
+freezed 2.5.7 在 Dart 3.13 上不可用（依赖的 _macros 已从 SDK 移除），因此：
+- hive 2.2.3 / hive_flutter → hive_ce 2.20.0 / hive_ce_flutter 2.3.4（官方维护分支）
+- hive_generator 2.0.1 → hive_ce_generator 1.11.3
+- freezed 2.5.7（原锁死）→ freezed 4.0.2 + freezed_annotation 3.1.0
+- build_runner 2.4.15 → 2.16.1 + build 4.0.0
+AppSettingsAdapter 的向后兼容读取（老记录缺 glassMode/lastSeenVersion 时回落默认值）
+与 NewsArticleAdapter 的字段号均未变化，老数据可继续读。
+
+五、Android 构建链迁移（Flutter 3.47.5 要求 Gradle ≥8.14 / AGP ≥8.9）
+- Groovy DSL → Kotlin DSL：settings.gradle.kts / build.gradle.kts / app/build.gradle.kts
+- Gradle 8.7 → 9.3.1，AGP 8.6.0 → 9.1.0，Kotlin 1.9.24 → 2.4.0
+- gradle.properties 增加 android.newDsl=false / android.builtInKotlin=false（AGP 9 必需）
+- compileSdk 35 → 36（url_launcher_android 等插件要求），targetSdk 保持 35
+- 固定签名（wentianxia-release.jks，debug/release 共用）与 overridePathCheck 保留
+
+六、其它
+- app_theme: CardTheme → CardThemeData（Flutter 3.47 API）
+- README 整体重写：新增第 2 章讲 shader 真折射原理/uniform 约定/三层降级表
+- codemagic.yaml: flutter 3.47.5，并新增「校验着色器是否真打进 APK」步骤
+- 新增 test/changelog_gate_test 的降级用例；glass 回归测试同步更新
+
+验证（Flutter 3.47.5 / Dart 3.13.4）：
+- flutter analyze → No issues found!
+- flutter test → 24/24 通过
+- flutter build apk --release → 54.1MB
+- APK 内验证：assets/flutter_assets/shaders/liquid_glass.frag 18368 字节（impellerc 编译通过）
+- versionCode=5 / versionName=3.0.0，签名 SHA-1 10A43DBA...8FD6（与 2.x 一致，可覆盖安装）
