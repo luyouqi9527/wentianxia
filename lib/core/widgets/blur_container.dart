@@ -7,7 +7,12 @@ import 'liquid_glass.dart';
 export 'glass_widgets.dart'
     show LiquidGlass, GlassTint, BlurButton, BlurGroup, LiquidGlassGroup;
 export 'liquid_glass.dart'
-    show GlassStyle, GlassMaterial, GlassScope, LiquidGlassRefraction;
+    show
+        GlassStyle,
+        GlassMaterial,
+        GlassScope,
+        LiquidGlassRefraction,
+        LiquidGlassSdf;
 
 /// 通用「液态玻璃 / 毛玻璃」容器 —— 全站玻璃控件的统一入口。
 ///

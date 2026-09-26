@@ -327,25 +327,30 @@ class _LiquidGlassPainter extends CustomPainter {
     final double sw = size.shortestSide;
     final double radius = borderRadius?.topLeft.x ?? 0.0;
     final double bezel = style.bezelFor(size);
+    // Kyant0 的 refractionHeight：折射带的内边界距离（bezel 的内侧一半）。
+    final double refractHeight = style.refractHeightFor(size);
 
     // ---------------------------------------------------------------- (1) 折射
-    // 边缘透镜：t = depth/bezel → profile(t)（圆柱倒角 + Snell 近似）。
-    // 亮度增量严格由 [LiquidGlassRefraction.profile] 驱动：越靠近边缘位移越大，
-    // 表现越亮（凸透镜汇聚光）。中心 region 的 profile = 0 → 不画任何东西，
-    // 保证「中心保持不动」。
-    if (style.refraction > 0 && bezel > 0.5) {
+    // 边缘透镜，与 Kyant0 `RoundedRectRefractionShaderString` 同构：
+    //   depth = -sd；depth >= refractHeight 时**原样采样**（中心不动）
+    //   d = circleMap(1 - depth/refractHeight) × refractionAmount
+    //   sample = coord + d × grad
+    // 这里把「位移 → 采样偏移」的结果解析地画成亮度层：
+    // 位移越大（越靠边）采样越往放大区取，表现为该环带更亮；
+    // profile = 0 的内侧区域不画任何东西，保证「中心保持不动」。
+    if (style.refraction > 0 && refractHeight > 0.5) {
       canvas.save();
       canvas.clipRRect(rrect);
 
       const int steps = 6;
       for (int i = 0; i < steps; i++) {
-        final double t = (i + 0.5) / steps; // 该环带的归一化深度
+        // 该环带的归一化深度（1 = 边缘最强，0 = 折射带内边界不动）
+        final double t = (i + 0.5) / steps;
         final double profile = LiquidGlassRefraction.profile(t); // 0..1
         final double alpha =
             (profile * style.refraction * 0.30).clamp(0.0, 0.30);
         if (alpha <= 0.002) continue;
-        final double inset = bezel * t;
-        final double half = bezel / (steps * 2);
+        final double inset = refractHeight * (1 - t);
         final RRect band = RRect.fromRectAndRadius(
           Rect.fromLTRB(inset, inset, size.width - inset, size.height - inset),
           Radius.circular(math.max(0, radius - inset)),
@@ -354,9 +359,10 @@ class _LiquidGlassPainter extends CustomPainter {
           band,
           Paint()
             ..style = PaintingStyle.stroke
-            ..strokeWidth = bezel / steps + 0.6
+            ..strokeWidth = refractHeight / steps + 0.6
             ..color = Colors.white.withValues(alpha: alpha)
-            ..maskFilter = MaskFilter.blur(BlurStyle.normal, half),
+            ..maskFilter =
+                MaskFilter.blur(BlurStyle.normal, refractHeight / steps / 2),
         );
       }
 

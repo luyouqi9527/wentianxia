@@ -37,7 +37,6 @@
 library;
 
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -98,7 +97,14 @@ class GlassStyle {
       .clamp(bezelMin, bezelMax)
       .toDouble();
 
-  /// 面板尺寸 → 位移像素上限。
+  /// 面板尺寸 → 折射带内边界距离（Kyant0 的 `refractionHeight`）。
+  ///
+  /// Kyant0 的典型取值是 `lens(12dp, 24dp)`，即 `refractionHeight ≈ bezel / 2`；
+  /// 这里用 `bezel / refractionAmount`（refractionAmount = 1.8~2.0 → 约 bezel/2）。
+  double refractHeightFor(Size size) =>
+      bezelFor(size) / math.max(1.0, refractionAmount);
+
+  /// 面板尺寸 → 位移像素上限（文档：bezel × 1.6~2.0）。
   double displacementFor(Size size) => bezelFor(size) * refractionAmount;
 
   /// 小控件（按钮 / Chip）：折射带与模糊都要按比例收小，否则细节糊掉。
@@ -179,96 +185,68 @@ class GlassStyle {
       );
 }
 
-/// 折射剖面：凸超椭圆 `f(u) = (1 - (1-u)^4)^(1/4)` + Snell 2D 近似。
+/// 折射剖面：圆形倒角 `circleMap`（与 Kyant0 的 AGSL 实现等价）。
 ///
-/// 与文档 1.1 节 `buildProfile()` 完全一致（n₁/n₂ = 1/1.5），
-/// 结果归一化到 0..1（边缘最大、中心为 0）。
+/// Kyant0 原式（`RoundedRectRefractionShaderString`）：
+/// ```glsl
+/// if (-sd >= refractionHeight) return content.eval(coord);   // 超出折射带 → 不动
+/// float d = circleMap(1.0 - -sd / refractionHeight) * refractionAmount;
+/// ```
+/// 即 `depth/refractHeight = 0`（折射带内边界）→ 位移 0；
+/// `depth/refractHeight = 1`（边缘）→ 位移最大。
 class LiquidGlassRefraction {
   const LiquidGlassRefraction._();
 
-  /// 预计算 65 个采样点（文档：128 个足够，这里取足够用的 64+1）。
-  static const int _samples = 64;
-
-  static final Float64List _profile = _buildProfile(_samples);
-
-  static Float64List _buildProfile(int samples) {
-    const double n = 1 / 1.5; // 空气 → 玻璃
-    const double eps = 0.001;
-    final Float64List raw = Float64List(samples + 1);
-    double maxValue = 0;
-
-    // 倒角高度剖面：把玻璃边缘看成圆柱形倒角（与 Kyant0 的
-    // circleMap = 1 - sqrt(1 - x²) 等价）。
-    // 物理含义：外缘高度 0、切向平行于玻璃面（不折射）；越往里倾斜越缓，
-    // 到折射带内边界时已经接近平面（法线朝上 → 不再偏折）。
-    // 因此位移量沿 u 单调递增：中心 0 → 边缘最大，正好对应“中心不动、
-    // 边缘被放大”的透镜效应。
-    //
-    // 注：文档里 LiquidLens 用的是超椭圆剖面 (1-(1-x)^4)^(1/4)，
-    // 但那是给 feDisplacementMap 用的**归一化**版本，端点差分会得到负斜率；
-    // 这里用圆柱倒角剖面，数学等价且端点良定义。
-    double height(double u) {
-      final double x = u.clamp(-1.0, 1.0);
-      final num inner = 1 - x * x;
-      if (inner <= 0) return 1;
-      return 1 - math.sqrt(inner);
-    }
-
-    for (int i = 0; i <= samples; i++) {
-      final double t = i / samples;
-      final double slope =
-          (height(t + eps) - height(t - eps)) / (2 * eps); // 剖面斜率 = tan θ₁
-      final double theta1 = math.atan(slope);
-      final double theta2 = math.asin(math.min(1, n * math.sin(theta1)));
-      final double d = math.tan(theta1 - theta2); // 侧向偏移
-      raw[i] = d;
-      if (d > maxValue) maxValue = d;
-    }
-    if (maxValue <= 0) return raw;
-    for (int i = 0; i <= samples; i++) {
-      raw[i] = raw[i] / maxValue; // 归一化 0..1
-    }
-    // 端点修正：中心（u=0）剖面斜率为 0 → 位移为 0；边缘（u=1）取最大位移。
-    raw[0] = 0;
-    raw[samples] = 1;
-    return raw;
+  /// 圆形倒角剖面 `circleMap(x) = 1 - sqrt(1 - x²)`，x∈[0,1]。
+  static double circleMap(double x) {
+    final double t = x.clamp(0.0, 1.0);
+    return 1 - math.sqrt(1 - t * t);
   }
 
-  /// 归一化深度 → 归一化位移量（0 = 中心不动，1 = 边缘最大）。
+  /// 归一化深度 → 位移量：0 = 中心/折射带内边界（不动），1 = 边缘（最大）。
   static double profile(double normalizedDepth) {
-    final double u = normalizedDepth.clamp(0.0, 1.0);
-    final double pos = u * _samples;
-    final int i0 = pos.floor().clamp(0, _samples - 1);
-    final int i1 = math.min(i0 + 1, _samples);
-    final double frac = pos - i0;
-    return _profile[i0] * (1 - frac) + _profile[i1] * frac;
+    return circleMap(normalizedDepth.clamp(0.0, 1.0));
   }
+}
 
-  /// 圆角矩形 SDF（与文档 1.3 节一致）：< 0 在内部，0 在边界，> 0 在外部。
+/// 圆角矩形 SDF 工具（与 Kyant0 / 文档 1.3 节逐行一致）。
+class LiquidGlassSdf {
+  const LiquidGlassSdf._();
+
+  /// `sdRoundedRect(coord, halfSize, radius)`：< 0 内部、0 边界、> 0 外部。
   static double sdRoundedRect(Offset p, Size halfSize, double radius) {
     final double qx = p.dx.abs() - (halfSize.width - radius);
     final double qy = p.dy.abs() - (halfSize.height - radius);
-    final double outside =
-        math.sqrt(math.max(qx, 0) * math.max(qx, 0) + math.max(qy, 0) * math.max(qy, 0));
+    final double outside = math.sqrt(
+      math.max(qx, 0) * math.max(qx, 0) + math.max(qy, 0) * math.max(qy, 0),
+    );
     final double inside = math.min(math.max(qx, qy), 0);
     return outside + inside - radius;
   }
 
-  /// 中心点的归一化深度（0 = 正好在边缘，1 = 已越过折射带）。
+  /// 中心点归一化深度（驱动折射剖面）。
+  ///
+  /// 返回值 `0..1`：`0` = 不折射（折射带以内，含面板中心），
+  /// `1` = 位移最大（已到面板边缘）。等价于 Kyant0 shader 里的
+  /// `circleMap` 参数：`位移 = circleMap(归一化深度) × refractionAmount`。
+  ///
+  /// 文档坑位 4：梯度半径必须用 `min(r × 1.5, min(halfW, halfH))`，
+  /// 否则圆角处会出现放射状折痕。
   static double normalizedDepth(
     Offset centered,
     Size size, {
-    required double bezel,
+    required double refractHeight,
     required double radius,
   }) {
+    if (refractHeight <= 0) return 0;
     final Size half = Size(size.width / 2, size.height / 2);
-    // 文档坑位 4：梯度/半径要用 min(r × 1.5, min(halfW, halfH))，
-    // 否则圆角处会出现放射状折痕。
-    final double gradRadius = math.min(radius * 1.5, math.min(half.width, half.height));
+    final double gradRadius =
+        math.min(radius * 1.5, math.min(half.width, half.height));
     final double sd = sdRoundedRect(centered, half, gradRadius);
     final double depth = -sd; // 内部为正
-    if (depth <= 0) return 0;
-    return (depth / bezel).clamp(0.0, 1.0);
+    if (depth <= 0) return 1; // 面板外沿 → 最强
+    if (depth >= refractHeight) return 0; // 折射带以内（含中心）→ 不动
+    return (1 - depth / refractHeight).clamp(0.0, 1.0);
   }
 }
 

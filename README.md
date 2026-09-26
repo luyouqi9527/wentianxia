@@ -33,17 +33,20 @@
 
 | 文档要素 | 本实现 |
 | --- | --- |
-| 圆角矩形 SDF | `LiquidGlassRefraction.sdRoundedRect`（文档 1.3 节原式） |
+| 圆角矩形 SDF | `LiquidGlassSdf.sdRoundedRect`（与 Kyant0 `Shaders.kt` 的同名函数逐行一致） |
 | 半径取值坑位 | 梯度半径用 `min(r × 1.5, min(halfW, halfH))`，避免圆角处放射状折痕 |
-| 折射剖面 | 圆柱倒角 `h(u)=1-√(1-u²)` → `slope=tanθ₁` → Snell `n=1/1.5` → 侧向位移 `tan(θ₁-θ₂)`，归一化后**中心 0 → 边缘 1** |
-| 归一化深度 | `t = clamp(-sd / bezel, 0, 1)`，只有 `t<1` 的环形带参与折射 |
+| 折射剖面 | `circleMap(x)=1-√(1-x²)`：`refractHeight = bezel / refractionAmount`，`depth ≥ refractHeight` → 不折射；`depth → 0` → 位移最大 |
+| 归一化深度 | `LiquidGlassSdf.normalizedDepth`：0 = 不动，1 = 边缘最强（`refractionHeight` / `refractionAmount` 两个参数与 Kyant0 `lens(12dp, 24dp)` 同构） |
 | 位移量 | `bezel = clamp(min(w,h) × 0.12, 6, 28)`，`位移 ≈ bezel × 1.6~2.0` |
 | 模糊必须小 | 液态玻璃 σ = 2~4（文档：>8px 会把折射细节抹平，退化成毛玻璃） |
 | 六层堆叠顺序 | 折射 → 模糊 → tint → 高光 → 色边/边缘光 → 内容 |
-| 色散 | 冷暖双侧 1px 内描边（文档 1.5 节的廉价替代方案） |
-| 高光 | `∇SDF` 与 45° 光源点积，`abs(dot)` 实现双面反光 |
+| 色散 | 冷暖双侧 1px 内描边（文档 1.5 节的廉价替代方案；Kyant0 的 7 次采样在移动端太贵） |
+| 高光 | `∇SDF` 与 45° 光源点积，`abs(dot)` 实现双面反光（对应 `DefaultHighlightShaderString`） |
 | 内阴影 | 上暗下亮的 inset 渐变（玻璃厚度） |
+| 交互形变 | 按下放大 4% / 120ms 缓出（文档 2.10 的「液」感来源） |
+| materialize 入场 | 渐变折射强度 + 轻微缩放，而不是淡入淡出（WWDC25-219 论断 2） |
 | 参数 | `saturation 1.35`、`tint alpha 0.09~0.14`、`specular 0.38~0.5`、`innerShadow 0.10~0.16` |
+| 避免 glass on glass | 一条 bar 只做一次玻璃；条内控件用 `GlassTint`（静态填充，不叠 backdrop 层） |
 
 > **关于「真·背景重采样」**：Flutter 的 `dart:ui` 只提供
 > `ImageFilter.blur/dilate/erode/matrix/compose`，**没有**把 `FragmentShader`

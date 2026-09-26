@@ -140,21 +140,21 @@ void main() {
   group('液态玻璃折射数学（与《液态玻璃实现技术文档》一致）', () {
     test('圆角矩形 SDF：内部为负、边界为 0、外部为正', () {
       // 中心
-      final double center = LiquidGlassRefraction.sdRoundedRect(
+      final double center = LiquidGlassSdf.sdRoundedRect(
         Offset.zero,
         const Size(100, 50),
         20,
       );
       expect(center, lessThan(0));
       // 右侧边界（半宽 100 → 圆角半径内）
-      final double edge = LiquidGlassRefraction.sdRoundedRect(
+      final double edge = LiquidGlassSdf.sdRoundedRect(
         const Offset(100, 0),
         const Size(100, 50),
         20,
       );
       expect(edge, closeTo(0, 0.001));
       // 外部
-      final double outside = LiquidGlassRefraction.sdRoundedRect(
+      final double outside = LiquidGlassSdf.sdRoundedRect(
         const Offset(140, 0),
         const Size(100, 50),
         20,
@@ -162,36 +162,45 @@ void main() {
       expect(outside, greaterThan(0));
     });
 
-    test('折射剖面：中心为 0、边缘最大、单调递增', () {
-      expect(LiquidGlassRefraction.profile(0), closeTo(0, 0.02));
-      final double atEdge = LiquidGlassRefraction.profile(1);
-      expect(atEdge, closeTo(1, 0.02));
+    test('折射剖面 circleMap：内边界为 0、边缘为 1、单调递增', () {
+      expect(LiquidGlassRefraction.profile(0), closeTo(0, 1e-9));
+      expect(LiquidGlassRefraction.profile(1), closeTo(1, 1e-9));
       double previous = -1;
-      for (int i = 0; i <= 10; i++) {
-        final double v = LiquidGlassRefraction.profile(i / 10);
+      for (int i = 0; i <= 20; i++) {
+        final double v = LiquidGlassRefraction.profile(i / 20);
         expect(v, greaterThanOrEqualTo(previous - 1e-9));
         previous = v;
       }
     });
 
-    test('归一化深度：中心为 1（超出折射带）、边缘附近小于 1', () {
+    test('归一化深度：折射带内边界为 0（不动）、越靠边越接近 1', () {
       const Size size = Size(200, 120);
-      final double center = LiquidGlassRefraction.normalizedDepth(
-        Offset.zero,
-        size,
-        bezel: 14,
-        radius: 20,
-      );
-      expect(center, 1.0);
-
-      final double nearEdge = LiquidGlassRefraction.normalizedDepth(
+      // 折射带内边界（离边缘正好 refractHeight）：归一化深度 ≈ 0 → 不折射
+      final double atBandInner = LiquidGlassSdf.normalizedDepth(
         const Offset(96, 0),
         size,
-        bezel: 14,
+        refractHeight: 4,
         radius: 20,
       );
-      expect(nearEdge, lessThan(1.0));
-      expect(nearEdge, greaterThan(0.0));
+      expect(atBandInner, closeTo(0.0, 0.02));
+
+      // 更靠外：归一化深度变大
+      final double nearEdge = LiquidGlassSdf.normalizedDepth(
+        const Offset(99, 0),
+        size,
+        refractHeight: 4,
+        radius: 20,
+      );
+      expect(nearEdge, greaterThan(atBandInner));
+
+      // 面板中心：超出折射带 → 0（shader 会原样采样，中心不动）
+      final double center = LiquidGlassSdf.normalizedDepth(
+        Offset.zero,
+        size,
+        refractHeight: 4,
+        radius: 20,
+      );
+      expect(center, 0.0);
     });
 
     test('bezel 取值遵循文档公式 clamp(min(w,h) × 0.12, 6, 28)', () {
